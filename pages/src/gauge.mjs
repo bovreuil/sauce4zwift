@@ -3,6 +3,7 @@ import * as common from './common.mjs';
 import * as echarts from '../deps/src/echarts.mjs';
 import {cssColor, getTheme} from './echarts-sauce-theme.mjs';
 
+common.enableSentry();
 echarts.registerTheme('sauce', getTheme('dynamic'));
 
 const doc = document.documentElement;
@@ -10,9 +11,9 @@ const page = location.pathname.split('/').at(-1).split('.')[0];
 const type = (new URLSearchParams(location.search)).get('t') || page || 'power';
 const L = sauce.locale;
 const H = L.human;
+let settings; // eslint-disable-line prefer-const
+let powerZones;
 let sport = 'cycling';
-let imperial = !!common.storage.get('/imperialUnits');
-L.setImperial(imperial);
 
 const defaultAxisColorBands = [[1, cssColor('fg', 1, 0.2)]];
 
@@ -23,7 +24,7 @@ function getWBalValue(x) {
     if (!_wPrime) {
         return;
     }
-    return x.stats.power.wBal / _wPrime * 100;
+    return x.wBal / _wPrime * 100;
 }
 
 
@@ -48,21 +49,32 @@ const gaugeConfigs = {
         getLabel: H.number,
         detailFormatter: x => `{value|${H.power(x)}}\n{unit|watts}`,
         axisColorBands: data => {
-            if (data.athlete && data.athlete.ftp) {
-                const zones = sauce.power.cogganZones(data.athlete.ftp);
-                const min = settings.min;
-                const delta = settings.max - min;
-                const p = gaugeConfigs.power.getValue(data);
-                return [
-                    [(zones.z1 - min) / delta, '#444d'],
-                    [(zones.z2 - min) / delta, p > zones.z1 ? '#24d' : '#24d3'],
-                    [(zones.z3 - min) / delta, p > zones.z2 ? '#5b5' : '#5b53'],
-                    [(zones.z4 - min) / delta, p > zones.z3 ? '#dd3' : '#dd33'],
-                    [(zones.z5 - min) / delta, p > zones.z4 ? '#fa0' : '#fa03'],
-                    [(zones.z6 - min) / delta, p > zones.z5 ? '#b22' : '#b223'],
-                    [(zones.z7 - min) / delta, p > zones.z6 ? '#407' : '#4073'],
-                ];
+            if (powerZones === undefined) {
+                powerZones = null;
+                common.rpc.getPowerZones(1).then(zones => powerZones = zones);
+                return;
             }
+            if (!powerZones || !data.athlete || !data.athlete.ftp) {
+                return;
+            }
+            const min = settings.min;
+            const delta = settings.max - min;
+            const power = gaugeConfigs.power.getValue(data);
+            const normZones = powerZones.filter(x => !x.overlap);
+            if (normZones[0].from > 0) {
+                // Always pad in case of non zero offset (i.e. fake active recovery zone)
+                normZones.unshift({zone: '', from: 0, to: normZones[0].from});
+            }
+            const zoneColors = common.getPowerZoneColors(normZones);
+            const bands = normZones.map(x => [
+                Math.min(1, Math.max(0, ((x.to || Infinity) * data.athlete.ftp - min) / delta)),
+                zoneColors[x.zone] + (power / data.athlete.ftp < (x.from || 0) ? '3' : '')
+            ]);
+            if (bands[bands.length - 1][0] < 1) {
+                // Unlikely custom zones with none Infinite final zone
+                bands.push([1, '#0005']);
+            }
+            return bands;
         },
     },
     hr: {
@@ -81,7 +93,7 @@ const gaugeConfigs = {
     pace: {
         name: 'Speed',
         defaultColor: '#273',
-        ticks: imperial ? 6 : 10,
+        ticks: common.imperialUnits ? 6 : 10,
         defaultSettings: {
             min: 0,
             max: 100,
@@ -89,7 +101,9 @@ const gaugeConfigs = {
         getValue: x => settings.dataSmoothing ? x.stats.speed.smooth[settings.dataSmoothing] : x.state.speed,
         getLabel: x => H.pace(x, {precision: 0, sport}),
         detailFormatter: x => {
-            const unit = sport === 'running' ? (imperial ? '/mi' : '/km') : (imperial ? 'mph' : 'kph');
+            const unit = sport === 'running' ?
+                (common.imperialUnits ? '/mi' : '/km') :
+                (common.imperialUnits ? 'mph' : 'kph');
             return `{value|${H.pace(x, {precision: 1, sport})}}\n{unit|${unit}}`;
         },
         longPeriods: true,
@@ -117,7 +131,7 @@ const gaugeConfigs = {
         },
         getValue: x => settings.dataSmoothing ? x.stats.draft.smooth[settings.dataSmoothing] : x.state.draft,
         getLabel: H.number,
-        detailFormatter: x => `{value|${H.number(x)}}\n{unit|% boost}`,
+        detailFormatter: x => `{value|${H.number(x)}}\n{unit|w savings}`,
         longPeriods: true,
     },
     wbal: {
@@ -147,9 +161,9 @@ const gaugeConfigs = {
     },
 };
 
-const config = gaugeConfigs[type];
+const config = new Map(Object.entries(gaugeConfigs)).get(type);
 const settingsStore = new common.SettingsStore(`gauge-settings-v1-${type}`);
-const settings = settingsStore.get(null, {
+settings = settingsStore.get(null, {
     refreshInterval: 1,
     dataSmoothing: 0,
     showAverage: false,
@@ -164,18 +178,14 @@ const settings = settingsStore.get(null, {
     ...config.defaultSettings,
 });
 common.themeInit(settingsStore);
+common.localeInit(settingsStore);
 doc.classList.remove('hidden-during-load');
 config.color = settings.colorOverride ? settings.color : config.defaultColor;
 
-
-function setBackground() {
-    const {solidBackground, backgroundColor} = settings;
-    doc.classList.toggle('solid-background', solidBackground);
-    if (solidBackground) {
-        doc.style.setProperty('--background-color', backgroundColor);
-    } else {
-        doc.style.removeProperty('--background-color');
-    }
+// Fix dataSmoothing bug fixed 01-05-2025
+if (typeof settings.dataSmoothing === 'string') {
+    console.warn('Fixing dataSmoothing bug');
+    settings.dataSmoothing = Number(settings.dataSmoothing);
 }
 
 
@@ -188,10 +198,10 @@ function colorAlpha(color, alpha) {
 }
 
 
-export async function main() {
+export function main() {
     common.addOpenSettingsParam('t', type);
     common.initInteractionListeners();
-    setBackground();
+    common.setBackground(settings);
     const content = document.querySelector('#content');
     const gauge = echarts.init(content.querySelector('.gauge'), 'sauce', {renderer: 'svg'});
     let relSize;
@@ -201,7 +211,6 @@ export async function main() {
         gauge.setOption({
             animationDurationUpdate: Math.max(200, Math.min(settings.refreshInterval * 1000, 1000)),
             animationEasingUpdate: 'linear',
-            tooltip: {},
             visualMap: config.visualMap,
             graphic: [{
                 elements: [{
@@ -369,16 +378,12 @@ export async function main() {
         renderer.render({force: true});
     });
     let reanimateTimeout;
-    settingsStore.addEventListener('changed', ev => {
-        const changed = ev.data.changed;
-        if (changed.has('/imperialUnits')) {
-            imperial = changed.get('/imperialUnits');
-            L.setImperial(imperial);
-        }
-        if (changed.has('color') || changed.has('colorOverride')) {
+    settingsStore.addEventListener('set', ev => {
+        const key = ev.data.key;
+        if (key === 'color' || key === 'colorOverride') {
             config.color = settings.colorOverride ? settings.color : config.defaultColor;
         }
-        setBackground();
+        common.setBackground(settings);
         renderer.fps = 1 / settings.refreshInterval;
         initGauge();
         gauge.setOption({series: [{animation: false}]});
@@ -400,7 +405,6 @@ export async function main() {
 
 export async function settingsMain() {
     common.initInteractionListeners();
-    const config = gaugeConfigs[type];
     if (config.noSmoothing) {
         document.querySelector('form [name="dataSmoothing"]').disabled = true;
     }

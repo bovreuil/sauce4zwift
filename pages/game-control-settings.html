@@ -8,10 +8,12 @@
 
         <title>Game Control - Settings - Sauce for Zwift™</title>
 
+        <script src="./src/preloads.js"></script>
+
         <link id="favicon" rel="shortcut icon" href="images/favicon.png"/>
         <link rel="stylesheet" href="css/common.css"/>
 
-        <script type="module" defer="false">
+        <script type="module">
             import {settingsMain} from './src/game-control.mjs';
             settingsMain();
         </script>
@@ -31,19 +33,7 @@
             <form>
                 <label>
                     <key>Theme override:</key>
-                    <select name="themeOverride">
-                        <option value="">Use app setting</option>
-                        <option value="sauce">Sauce</option>
-                        <option value="bluepink">Ice Blue Pink</option>
-                        <option value="green">Green Lantern</option>
-                        <option value="burgundy">Ron Burgundy</option>
-                        <option value="aqua">Aqua Salad</option>
-                        <option value="watermelon">Watermelon</option>
-                        <option value="light">Light</option>
-                        <option value="dark">Dark</option>
-                        <option value="transparent-light">Transparent - Light</option>
-                        <option value="transparent-dark">Transparent - Dark</option>
-                    </select>
+                    <select is="sauce-theme" override></select>
                 </label>
             </form>
         </div>

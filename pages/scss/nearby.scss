@@ -12,6 +12,10 @@ html {
             background: var(--background-color);
         }
     }
+
+    &.hide-header table thead {
+        display: none;
+    }
 }
 
 html:not(.overlay-mode) {
@@ -47,15 +51,20 @@ table {
         background-image: linear-gradient(to bottom, color.shade(bg, -10%), color.shade(bg, 0%));
 
         td {
+            font-weight: 600;
+            font-size: 0.80em;
             padding-top: 0.5em;
             padding-bottom: 0.5em;
-            font-weight: normal;
-            font-variant: all-small-caps;
+            text-transform: uppercase;
             white-space: nowrap;
-            font-weight: 700;
 
             &:hover {
                 background-color: #9355;
+            }
+
+            ms {
+                font-size: 1.38em;
+                font-weight: 450;
             }
 
             &[data-id="avatar"] {
@@ -104,14 +113,15 @@ table {
             pointer-events: none;
         }
 
-        &.marked {
-            background-image: linear-gradient(135deg, color.get(marked, 75%), color.shade(marked, -10%, 80%));
-            color: color.shade(marked, 100%);
-        }
 
         &.following {
             background-image: linear-gradient(135deg, color.get(following, 80%), color.shade(following, -10%, 80%));
             color: color.shade(following, 100%);
+        }
+
+        &.marked {
+            background-image: linear-gradient(135deg, color.get(marked, 75%), color.shade(marked, -10%, 80%));
+            color: color.shade(marked, 100%);
         }
 
         &.watching {
@@ -119,7 +129,8 @@ table {
             color: color.shade(primary, 100%);
         }
 
-        &.hidden {
+        &.hidden,
+        &.filtered {
             display: none;
         }
 
@@ -237,7 +248,6 @@ table {
     scroll-behavior: smooth;
     padding: 0;
     overflow: auto;
-    overflow: overlay; // chromium only
     position: relative;
     font-size: calc(var(--font-scale) * 1em);
 }

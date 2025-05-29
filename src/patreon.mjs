@@ -19,13 +19,16 @@ async function _api(res, options) {
 }
 
 
-export async function link(code) {
+export async function link(code, options={}) {
     storage.set('patreon-auth', null);
     let auth;
     try {
         auth = await _api('/patreon/auth', {
             method: 'POST',
-            headers: {'x-sauce-app': 'zwift'},
+            headers: {
+                'x-sauce-app': 'zwift',
+                'x-sauce-version': options.legacy ? '' : 2,
+            },
             body: JSON.stringify({code}),
         });
     } catch(e) {
@@ -57,10 +60,11 @@ export async function getMembership(options={}) {
     const r = await fetch(`https://api.saucellc.io/patreon/membership?${q}`, {
         headers: {
             'x-sauce-app': 'zwift',
+            'x-sauce-version': options.legacy ? '' : 2,
             Authorization: `${auth.id} ${auth.secret}`
         }
     });
-    if (!r.ok) { 
+    if (!r.ok) {
         if ([401, 403].includes(r.status)) {
             storage.set('patreon-auth', null);
         } else if (r.status !== 404) {
@@ -68,12 +72,12 @@ export async function getMembership(options={}) {
         }
         return null;
     } else {
-        return await r.json(); 
+        return await r.json();
     }
 }
 
 export async function getLegacyMembership(token) {
-    const r = await fetch('https://sauce.llc/patrons.json');
+    const r = await fetch('https://www.sauce.llc/patrons.json');
     const patrons = await r.json();
     if (patrons[token]) {
         return {

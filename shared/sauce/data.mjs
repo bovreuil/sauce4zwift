@@ -16,6 +16,16 @@ export function avg(data, offt) {
 }
 
 
+export function expWeightedAvg(size=2, seed=0) {
+    const cPrev = Math.exp(-1 / size);
+    const cNext = 1 - cPrev;
+    let avg = seed;
+    const setGet = v => avg = (avg * cPrev) + (v * cNext);
+    setGet.get = () => avg;
+    return setGet;
+}
+
+
 export function max(data, options={}) {
     // Avoid stack overflow by only use Math.max on small arrays
     if (!data || (!options.index && data.length < 65535)) {
@@ -171,7 +181,7 @@ export function activeTime(timeStream, activeStream) {
 }
 
 
-let _timeGapsCache = new WeakMap();
+const _timeGapsCache = new WeakMap();
 export function recommendedTimeGaps(timeStream) {
     const hash = `${timeStream.length}-${timeStream[0]}-${timeStream[timeStream.length - 1]}`;
     if (!_timeGapsCache.has(timeStream) || _timeGapsCache.get(timeStream).hash !== hash) {
@@ -216,10 +226,7 @@ export function *range(startOrCount, stop, step) {
 export class Pad extends Number {}
 
 
-export class Zero extends Pad {}
-
-
-export class Break extends Zero {
+export class Break extends Pad {
     constructor(pad) {
         super(0);
         this.pad = pad;
@@ -237,7 +244,7 @@ function getSoftPad(n) {
     return _padCache.get(sig);
 }
 
-const ZERO = new Zero();
+const ZERO = new Pad(0);
 
 
 export class RollingAverage {
@@ -245,6 +252,7 @@ export class RollingAverage {
         this.period = period || undefined;
         this.idealGap = options.idealGap;
         this.maxGap = options.maxGap;
+        this._padThreshold = this.idealGap ? this.idealGap * 1.61803 : null;
         this._active = options.active;
         this._ignoreZeros = options.ignoreZeros;
         this._times = [];
@@ -358,7 +366,7 @@ export class RollingAverage {
             +value || (
                 value != null &&
                 !Number.isNaN(value) &&
-                (!this._ignoreZeros && !(value instanceof Zero))
+                (!this._ignoreZeros && !(value instanceof Pad))
             )
         );
     }
@@ -387,7 +395,7 @@ export class RollingAverage {
                         this._add(prevTS + i, ZERO);
                     }
                 }
-            } else if (this.idealGap && gap > (this.idealGap * 2)) {
+            } else if (this.idealGap && gap > this._padThreshold) {
                 for (let i = this.idealGap; i < gap; i += this.idealGap) {
                     this._add(prevTS + i, getSoftPad(value));
                 }
@@ -439,15 +447,18 @@ export class RollingAverage {
         if (length > this._values.length) {
             throw new Error('resize underflow');
         }
+        let added = 0;
         for (let i = this._length; i < length; i++) {
             this.processAdd(i);
             this._length++;
+            added++;
             if (this.period) {
                 while (this.full({offt: 1})) {
                     this.shift();
                 }
             }
         }
+        return added;
     }
 
     firstTime(options) {
@@ -480,12 +491,14 @@ export class RollingAverage {
         return this._length - this._offt;
     }
 
-    values() {
-        return this._values.slice(this._offt, this._length);
+    values(offt=0, len) {
+        const l = len === undefined ? this._length : Math.min(this._length, this._offt + len);
+        return this._values.slice(this._offt + offt, l);
     }
 
-    times() {
-        return this._times.slice(this._offt, this._length);
+    times(offt=0, len) {
+        const l = len === undefined ? this._length : Math.min(this._length, this._offt + len);
+        return this._times.slice(this._offt + offt, l);
     }
 
     timeAt(i) {
@@ -527,12 +540,12 @@ export function correctedRollingAverage(timeStream, period, options={}) {
         return;
     }
     if (options.idealGap === undefined || options.maxGap === undefined) {
-        const {ideal, max} = recommendedTimeGaps(timeStream);
+        const rec = recommendedTimeGaps(timeStream);
         if (options.idealGap === undefined) {
-            options.idealGap = ideal;
+            options.idealGap = rec.ideal;
         }
         if (options.maxGap === undefined) {
-            options.maxGap = max;
+            options.maxGap = rec.max;
         }
     }
     return new RollingAverage(period, options);
@@ -554,7 +567,8 @@ export function peakAverage(period, timeStream, valuesStream, options={}) {
     if (!roll) {
         return;
     }
-    return roll.importReduce(timeStream, valuesStream, options.activeStream, x => x.avg(),
+    return roll.importReduce(
+        timeStream, valuesStream, options.activeStream, x => x.avg(),
         (cur, lead) => cur >= lead);
 }
 
@@ -598,6 +612,6 @@ export function smooth(period, rawValues) {
 export function overlap([aStart, aEnd], [bStart, bEnd]) {
     const interStart = Math.max(aStart, bStart);
     const interEnd = Math.min(aEnd, bEnd);
-    const overlap = interEnd - interStart;
-    return overlap < 0 ? null : overlap + 1;
+    const o = interEnd - interStart;
+    return o < 0 ? null : o + 1;
 }

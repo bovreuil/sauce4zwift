@@ -1,26 +1,4 @@
 
-export function cssColor(key, shade=0, alpha=1) {
-    return `hsla(
-        var(--theme-${key}-hue),
-        var(--theme-${key}-sat),
-        calc(var(--theme-${key}-light) + (${shade * 100}% * var(--theme-${key}-shade-dir))),
-        ${alpha * 100}%)`;
-}
-
-
-export function getTheme(mode='static') {
-    if (mode === 'static') {
-        return staticTheme;
-    } else if (mode === 'dynamic') {
-        return genDynamicTheme();
-    } else if (mode === 'dynamic-alt') {
-        return genDynamicTheme({fg: 'fg-alt', bg: 'bg-alt'});
-    } else {
-        throw new TypeError('Invalid theme mode');
-    }
-}
-
-
 const staticTheme = {
     color: ["#c12e34", "#e6b600", "#0098d9", "#2b821d", "#005eaa", "#339ca8", "#cda819", "#32a487"],
     backgroundColor: "rgba(0,0,0,0)",
@@ -34,6 +12,11 @@ const staticTheme = {
         color: '#fffc',
         textBorderColor: 'transparent',
         textBorderWidth: 0,
+    },
+    endLabel: {
+        color: '#fffc',
+        textBorderColor: '#000c',
+        textBorderWidth: 2,
     },
     title: {
         textStyle: {
@@ -184,13 +167,44 @@ const staticTheme = {
 };
 
 
+export function cssColor(key, shade=0, alpha=1) {
+    return `hsla(
+        var(--theme-${key}-hue),
+        var(--theme-${key}-sat),
+        calc(var(--theme-${key}-light) + (${shade * 100}% * var(--theme-${key}-shade-dir))),
+        ${alpha * 100}%)`;
+}
+
+
+export function getTheme(mode='static', options) {
+    if (mode === 'static') {
+        return staticTheme;
+    } else if (mode === 'dynamic') {
+        return genDynamicTheme(options);
+    } else if (mode === 'dynamic-alt') {
+        return genDynamicTheme({fg: 'fg-alt', bg: 'bg-alt', ...options});
+    } else {
+        throw new TypeError('Invalid theme mode');
+    }
+}
+
+
 function genDynamicTheme({fg='fg', bg='bg'}={}) {
     const theme = JSON.parse(JSON.stringify(staticTheme));
     return Object.assign(theme, {
         label: {
-            color: cssColor(fg, 0, 0.9),
+            color: cssColor(fg, 0, 0.80),
+            fontWeight: 600,
+            fontSize: '0.8em',
             textBorderColor: 'transparent',
             textBorderWidth: 0,
+        },
+        endLabel: {
+            color: cssColor(fg, 0, 0.80),
+            fontWeight: 600,
+            fontSize: '0.6em',
+            textBorderColor: cssColor(fg, 1, 0.80),
+            textBorderWidth: 2,
         },
         title: {
             textStyle: {
@@ -209,7 +223,7 @@ function genDynamicTheme({fg='fg', bg='bg'}={}) {
             itemStyle: {
                 borderWidth: 0,
                 borderColor: cssColor(fg, 0, 0.74),
-            }
+            },
         },
         parallel: {
             itemStyle: {
@@ -259,6 +273,9 @@ function genDynamicTheme({fg='fg', bg='bg'}={}) {
             axisLabel: {
                 show: true,
                 color: cssColor(fg, 0, 0.8),
+                fontSize: '0.7em',
+                fontWeight: 600,
+                margin: 12,
             },
             splitLine: {
                 show: false,
@@ -272,19 +289,49 @@ function genDynamicTheme({fg='fg', bg='bg'}={}) {
         valueAxis: {
             axisLine: {
                 show: true,
-                lineStyle: {color: "rgba(255,255,255,0.5)"}
+                lineStyle: {color: cssColor(fg, 0, 0.5)},
             },
             axisTick: {
                 show: true,
-                lineStyle: {color: "rgba(255,255,255,0.25)"}
+                lineStyle: {color: cssColor(fg, 0, 0.25)},
             },
             axisLabel: {
                 show: true,
-                color: "rgba(255,255,255,0.8)"
+                color: cssColor(fg, 0, 0.8),
+                fontSize: '0.7em',
+                fontWeight: 600,
+                margin: 12,
             },
             splitLine: {
                 show: true,
-                lineStyle: {color: ["rgba(255,255,255,0.25)"]}
+                lineStyle: {color: cssColor(fg, 0, 0.10)},
+            },
+            splitArea: {
+                show: false,
+                areaStyle: {
+                    color: ["rgba(250,250,250,0.3)", "rgba(200,200,200,0.3)"]
+                }
+            }
+        },
+        timeAxis: {
+            axisLine: {
+                show: true,
+                lineStyle: {color: cssColor(fg, 0, 0.5)},
+            },
+            axisTick: {
+                show: true,
+                lineStyle: {color: cssColor(fg, 0, 0.25)},
+            },
+            axisLabel: {
+                show: true,
+                color: cssColor(fg, 0, 0.8),
+                fontSize: '0.7em',
+                fontWeight: 600,
+                margin: 12,
+            },
+            splitLine: {
+                show: true,
+                lineStyle: {color: cssColor(fg, 0, 0.10)},
             },
             splitArea: {
                 show: false,
@@ -294,39 +341,45 @@ function genDynamicTheme({fg='fg', bg='bg'}={}) {
             }
         },
         toolbox: {
-            iconStyle: {borderColor: "rgba(255,255,255,0.8)"},
-            emphasis: {iconStyle: {borderColor: "#ffffff"}}
+            iconStyle: {borderColor: cssColor(fg, 0.1, 0.8)},
+            emphasis: {iconStyle: {borderColor: cssColor(fg, 0.1, 1)}},
         },
-        legend: {textStyle: {color: "rgba(255,255,255,0.92)"}},
+        legend: {textStyle: {color: cssColor(fg, 0.1, 0.92)}},
         tooltip: {
             confine: true,
-            backgroundColor: cssColor(fg, 0.9, 0.92),
+            backgroundColor: cssColor(fg, 0.9, 0.86),
             borderColor: cssColor(fg, 0.1, 0.5),
             textStyle: {
-                color: cssColor(fg, 0.1),
+                color: cssColor(fg, 0),
             },
-            padding: 6,
-            axisPointer: {
-                lineStyle: {
-                    color: cssColor(fg, 0, 0.68),
-                    width: 1.5
-                },
-                crossStyle: {
-                    color: cssColor(fg, 0, 0.68),
-                    width: 2
-                }
+            padding: 10
+        },
+        axisPointer: {
+            lineStyle: {
+                color: cssColor(fg, 0, 0.90),
+                width: 1
+            },
+            crossStyle: {
+                color: cssColor(fg, 0, 0.84),
+                width: 2
             }
         },
         visualMap: {color: ["#1790cf", "#a2d4e6"]},
         markLine: {
-            lineStyle: {color: cssColor(fg, 0, 0.6)},
+            lineStyle: {
+                color: cssColor(fg, 0, 0.7),
+                cap: 'round',
+            },
             label: {
-                fontWeight: 700,
+                fontWeight: 600,
+                fontFamily: 'inherit',
                 distance: 2,
                 fontSize: '0.76em',
                 color: cssColor(fg, 0, 1),
-                textShadowColor: cssColor(fg, 1, 0.8),
-                textShadowBlur: 1,
+                textBorderColor: cssColor(fg, 1, 0.8),
+                textBorderWidth: 1,
+                textShadowColor: cssColor(fg, 1, 0.4),
+                textShadowBlur: 4,
             },
         },
         markPoint: {

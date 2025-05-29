@@ -66,11 +66,17 @@ export function message(msg) {
 }
 
 
+// Note that these are not spec validation matches and should
+// only be used for scrubbing (and tuned as such too).
+const homeExp = /([/\\](?:[uU]sers|home)[/\\]).*?([/\\\s)\]:}]|$)/gm;
+const ipAddrExp = /(\W|^)(?:[0-9]{1,3}\.){3}[0-9]{1,3}(\W|$)/gm;
+const emailExp = /(\W|^)[a-zA-Z0-9]+[a-zA-Z0-9._\-+]*?[a-zA-Z0-9_]+@[a-zA-Z0-9]+(?:\.[a-zA-Z0-9-]+)+(\W|$)/gm;
+
 function scrubSensitive(m) {
     return m && m
-        .replace(/([/\\]users[/\\]).*?([/\\])/i, '$1***$2/')
-        .replace(/(?:[0-9]{1,3}\.){3}[0-9]{1,3}/, '*.*.*.*')
-        .replace(/http:\/\/.*?:1080\//, 'http://<anonymous>:1080/');
+        .replace(homeExp, '$1REDACTED$2')
+        .replace(ipAddrExp, '$1*.*.*.*$2')
+        .replace(emailExp, '$1redacted@email.address$2');
 }
 
 
@@ -82,14 +88,21 @@ export function beforeSentrySend(result) {
     } else {
         result = JSON.parse(JSON.stringify(result));
     }
+    if (Sentry._sauceSpecialState) {
+        const uptime = Date.now() - Sentry._sauceSpecialState.startClock;
+        const runtime = performance.now() - Sentry._sauceSpecialState.startTimer;
+        const sleepOrClockDrift = uptime - runtime;
+        result.extra = Object.assign(result.extra || {}, {uptime, runtime, sleepOrClockDrift});
+    }
     try {
         if (result.exception && result.exception.values) {
             for (const exc of result.exception.values) {
-                if (exc.stacktrace && exc.stacktrace.frames) {
-                    for (const f of exc.stacktrace.frames) {
-                        if (f.filename) {
-                            f.filename = scrubSensitive(f.filename);
-                        }
+                if (!exc.stacktrace || !exc.stacktrace.frames) {
+                    continue;
+                }
+                for (const f of exc.stacktrace.frames) {
+                    if (f.filename) {
+                        f.filename = scrubSensitive(f.filename);
                     }
                 }
             }

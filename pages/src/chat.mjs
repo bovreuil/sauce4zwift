@@ -1,14 +1,17 @@
 import * as sauce from '../../shared/sauce/index.mjs';
 import * as common from './common.mjs';
 
-const H = sauce.locale.human;
+common.enableSentry();
 
+const H = sauce.locale.human;
 const doc = document.documentElement;
 const settings = common.settingsStore.get(null, {
     cleanup: 120,
     solidBackground: false,
     reverseOrder: false,
+    rightAlign: false,
     backgroundColor: '#00ff00',
+    messageTransparency: 30,
 });
 const athleteChatElements = new Map();
 
@@ -40,18 +43,18 @@ function fmtAge(ts) {
 
 
 function fmtGap(gap) {
-    const d = H.duration(Math.abs(gap), {short: true, seperator: ' '});
+    const d = H.duration(Math.abs(gap), {short: true, separator: ' ', html: true});
     const placement = gap > 0 ? 'behind' : 'ahead';
-    return `${d} ${placement}`;
+    return `${d} <abbr class="unit">${placement}</abbr>`;
 }
 
 
 function handleAthleteData(data) {
-    const liveText = liveDataFormatter(data);
+    const liveHtml = liveDataFormatter(data);
     for (const el of athleteChatElements.get(data.athleteId)) {
-        if (el._lastLiveText !== liveText) {
-            el.querySelector('.live').innerText = liveText;
-            el._lastLiveText = liveText;
+        if (el._lastLiveHtml !== liveHtml) {
+            el.querySelector('.live').innerHTML = liveHtml;
+            el._lastLiveHtml = liveHtml;
         }
     }
 }
@@ -62,8 +65,10 @@ function liveDataFormatter(data) {
         return '';
     }
     const items = [
-        data.stats.power.smooth[15] != null ? Math.round(data.stats.power.smooth[15]).toLocaleString() + 'w' : null,
-        data.state.heartrate ? data.state.heartrate.toLocaleString() + 'bpm' : null,
+        data.stats.power.smooth[15] != null ?
+            H.power(data.stats.power.smooth[15], {suffix: true, html: true}) :
+            null,
+        data.state.heartrate ? H.number(data.state.heartrate, {suffix: 'bpm', html: true}) : null,
     ];
     const gap = data.gap;
     if (gap != null) {
@@ -73,14 +78,10 @@ function liveDataFormatter(data) {
 }
 
 
-function setBackground() {
-    const {solidBackground, backgroundColor} = settings;
-    doc.classList.toggle('solid-background', solidBackground);
-    if (solidBackground) {
-        doc.style.setProperty('--background-color', backgroundColor);
-    } else {
-        doc.style.removeProperty('--background-color');
-    }
+function setMsgOpacity() {
+    const {messageTransparency} = settings;
+    const opacity = messageTransparency == null ? 0.7 : 1 - (messageTransparency / 100);
+    doc.style.setProperty('--message-background-opacity', opacity);
 }
 
 
@@ -90,10 +91,14 @@ export async function main() {
     const fadeoutTime = 5;
     content.style.setProperty('--fadeout-time', `${fadeoutTime}s`);
     content.classList.toggle('reverse-order', settings.reverseOrder === true);
-    setBackground();
-    common.settingsStore.addEventListener('changed', ev => {
-        setBackground();
+    content.classList.toggle('right-align', settings.rightAlign === true);
+    common.setBackground(settings);
+    setMsgOpacity();
+    common.settingsStore.addEventListener('set', ev => {
+        common.setBackground(settings);
+        setMsgOpacity();
         content.classList.toggle('reverse-order', settings.reverseOrder === true);
+        content.classList.toggle('right-align', settings.rightAlign === true);
         for (const el of document.querySelectorAll('.entry')) {
             if (el._resetCleanup) {
                 el._resetCleanup();
@@ -108,48 +113,57 @@ export async function main() {
     }
 
 
-    function addContentEntry(athleteId, el, age) {
+    function addContentEntry(chat, el, age, options={}) {
+        const athleteId = chat.from;
         content.appendChild(el);
-        void el.offsetLeft; // force layout/reflow so we can trigger animation.
+        if (!options.skipAnimation) {
+            void el.offsetLeft; // force layout/reflow so we can trigger animation.
+        }
         el.classList.add('slidein');
-        if (!athleteChatElements.has(athleteId)) {
-            athleteChatElements.set(athleteId, new Set());
+        let chatEls;
+        if (!chat.muted) {
+            if (!athleteChatElements.has(athleteId)) {
+                athleteChatElements.set(athleteId, new Set());
+            }
+            chatEls = athleteChatElements.get(athleteId);
+            if (!chatEls.size) {
+                common.subscribe(`athlete/${athleteId}`, handleAthleteData);
+            }
+            chatEls.add(el);
         }
-        const chatEls = athleteChatElements.get(athleteId);
-        if (!chatEls.size) {
-            common.subscribe(`athlete/${athleteId}`, handleAthleteData);
-        }
-        chatEls.add(el);
-        if (settings.cleanup) {
-            let to;
-            el._resetCleanup = () => {
-                clearTimeout(to);
-                to = setTimeout(() => {
-                    el.classList.add('fadeout');
+        let to;
+        el._resetCleanup = () => {
+            clearTimeout(to);
+            to = settings.cleanup ? setTimeout(() => {
+                el.classList.add('fadeout');
+                el._resetCleanup = null;
+                if (chatEls) {
                     chatEls.delete(el);
                     if (!chatEls.size) {
                         common.unsubscribe(`athlete/${athleteId}`, handleAthleteData);
                     }
-                    setTimeout(() => el.remove(), fadeoutTime * 1000);
-                }, (settings.cleanup - (age || 0)) * 1000);
-            };
-            el._resetCleanup();
-        }
+                }
+                setTimeout(() => el.remove(), fadeoutTime * 1000);
+            }, (settings.cleanup - (age || 0)) * 1000) : null;
+        };
+        el._resetCleanup();
     }
 
 
-    function onChatMessage(chat, age) {
+    function onChatMessage(chat, age, options) {
         const lastEntry = getLastEntry();
         if (lastEntry && Number(lastEntry.dataset.from) === chat.from &&
             !lastEntry.classList.contains('fadeout')) {
-            const chunk = document.createElement('div');
-            chunk.classList.add('chunk');
-            chunk.textContent = chat.message;
-            lastEntry.querySelector('.message').appendChild(chunk);
-            if (lastEntry._resetCleanup) {
-                lastEntry._resetCleanup();
+            if (!chat.muted) {
+                const chunk = document.createElement('div');
+                chunk.classList.add('chunk');
+                chunk.textContent = chat.message;
+                lastEntry.querySelector('.message').appendChild(chunk);
+                if (lastEntry._resetCleanup) {
+                    lastEntry._resetCleanup();
+                }
             }
-            return;
+            return lastEntry;
         }
         const entry = document.createElement('div');
         entry.dataset.from = chat.from;
@@ -164,7 +178,8 @@ export async function main() {
             const name = [chat.firstName, chat.lastName].filter(x => x).join(' ');
             entry.style.setProperty('--message-hue', athleteHue(chat.from) + 'deg');
             entry.innerHTML = `
-                <a href="profile.html?id=${chat.from}&width=800&height=350" target="_blank"
+                <a href="profile.html?id=${chat.from}&windowType=profile"
+                   target="profile_popup_${chat.from}"
                    class="avatar"><img src="${chat.avatar || 'images/blankavatar.png'}"/></a>
                 <div class="content">
                     <div class="header">
@@ -181,20 +196,25 @@ export async function main() {
         } else {
             const name = [chat.firstName, chat.lastName].filter(x => x).join('');
             entry.classList.add('muted');
-            entry.innerHTML = `<div class="content">Muted message from ${name}</div>`;
+            entry.innerHTML = `<div class="content">Muted message from: ${common.sanitize(name)}</div>`;
         }
         entry.addEventListener('dblclick', async () => {
             await common.rpc.watch(chat.from);
         });
-        addContentEntry(chat.from, entry, age);
+        addContentEntry(chat, entry, age, options);
+        return entry;
     }
 
+    let mostRecent;
     for (const x of (await common.rpc.getChatHistory()).reverse()) {
         const age = (Date.now() - x.ts) / 1000;
         if (settings.cleanup && age > settings.cleanup) {
             continue;
         }
-        onChatMessage(x, age);
+        mostRecent = onChatMessage(x, age, {skipAnimation: true});
+    }
+    if (mostRecent) {
+        mostRecent.scrollIntoView();
     }
     common.subscribe('chat', onChatMessage, {persistent: true});
 
@@ -203,7 +223,8 @@ export async function main() {
         const w = await (await fetch(wordsURL)).json();
         const _ = arr => arr[Math.floor(Math.random() * arr.length)];
         const phrases = [
-            () => `I ${_(w.verbPast)} through a ${_(w.noun)} in the ${_(w.noun)} and found ${_(w.number)} ${_(w.nounPlural)}.`,
+            () => `I ${_(w.verbPast)} through a ${_(w.noun)} in the ${_(w.noun)} and found ` +
+                `${_(w.number)} ${_(w.nounPlural)}.`,
             () => `${_(w.celebrityM)} is a ${_(w.adv)} ${_(w.adj)} ${_(w.noun)}.`,
             () => `My ${_(w.bodyPart)} has ${_(w.verbPast)} to ${_(w.place)}.`,
         ];

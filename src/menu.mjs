@@ -3,7 +3,6 @@ import os from 'node:os';
 import path from 'node:path';
 import * as windows from './windows.mjs';
 import {fileURLToPath} from 'node:url';
-import {getApp} from './main.mjs';
 import {createRequire} from 'node:module';
 const require = createRequire(import.meta.url);
 const {Menu, app, shell, nativeImage, Tray} = require('electron');
@@ -52,7 +51,7 @@ const template = [{
     label: 'Help',
     submenu: [{
         label: 'Sauce Home Page',
-        click: () => shell.openExternal('https://sauce.llc')
+        click: () => shell.openExternal('https://www.sauce.llc')
     }]
 }];
 
@@ -88,9 +87,15 @@ export function installTrayIcon() {
 }
 
 
+let _webServerURL;
+export function setWebServerURL(url) {
+    _webServerURL = url;
+}
+
+
 export function updateTrayMenu() {
     const pad = '  ';
-    const wins = Object.values(windows.getWindows());
+    const wins = windows.getWidgetWindowSpecs();
     const activeWins = wins.filter(x => x.private !== true && x.closed !== true);
     const closedWins = wins.filter(x => x.private !== true && x.closed === true);
     const menu = [{
@@ -106,7 +111,7 @@ export function updateTrayMenu() {
             ...activeWins.map(x => ({
                 label: pad + x.prettyName,
                 tooltip: x.prettyDesc,
-                click: () => windows.highlightWindow(x.id),
+                click: () => windows.highlightWidgetWindow(x.id),
             }))
         );
     }
@@ -117,29 +122,49 @@ export function updateTrayMenu() {
             ...closedWins.map(x => ({
                 label: pad + x.prettyName,
                 tooltip: x.prettyDesc,
-                click: () => windows.openWindow(x.id),
+                click: () => windows.openWidgetWindow(x.id),
             }))
         );
     }
-    const sauceApp = getApp();
-    if (sauceApp.webServerURL) {
+    if (_webServerURL) {
         menu.push({
             type: 'separator',
         }, {
-            label: `Web: ${sauceApp.webServerURL}`,
-            click: () => shell.openExternal(sauceApp.webServerURL),
+            label: `Web: ${_webServerURL}`,
+            click: () => shell.openExternal(_webServerURL),
         });
     }
+    menu.push({
+        label: 'Debug Logs',
+        click: () => windows.makeOrFocusEphemeralWindow({type: 'logs', id: 'debug-logs-tray-menu'})
+    }, {
+        label: 'Stats for Nerds',
+        click: () => windows.makeOrFocusEphemeralWindow({type: 'stats-for-nerds', id: 'stats-tray-menu'})
+    }, {
+        type: 'separator',
+    }, {
+        label: 'Analysis',
+        click: () => windows.makeOrFocusEphemeralWindow({type: 'analysis', id: 'analysis-tray-menu'})
+    }, {
+        label: 'Athletes',
+        click: () => windows.makeOrFocusEphemeralWindow({type: 'athletes', id: 'athletes-tray-menu'})
+    }, {
+        label: 'Events',
+        click: () => windows.makeOrFocusEphemeralWindow({type: 'events', id: 'events-tray-menu'})
+    }, {
+        label: 'Your Profile',
+        click: () => windows.makeOrFocusEphemeralWindow({type: 'profile', id: 'profile-tray-menu'})
+    });
     menu.push({
         type: 'separator',
     }, {
         label: 'Settings',
         click: () => {
             // Bit of a hack to reuse the spec from the normal overview windows...
-            const id = Object.values(windows.getWindows()).find(x => x.type === 'overview').id;
+            const id = windows.getWidgetWindowSpecs().find(x => x.type === 'overview').id;
             windows.makeCaptiveWindow({
                 width: 520,
-                height: 860,
+                height: 800,
                 file: '/pages/overview-settings.html',
                 frame: false,
                 transparent: true,
@@ -147,8 +172,7 @@ export function updateTrayMenu() {
             });
         },
     }, {
-        label: '',
-        enabled: false,
+        type: 'separator',
     }, {
         label: 'Quit',
         role: 'quit',

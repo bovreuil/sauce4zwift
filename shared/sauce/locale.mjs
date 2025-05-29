@@ -6,9 +6,14 @@ export function setImperial(en) {
 }
 
 
-export const metersPerMile = 1609.344;
-export const metersPerFoot = 0.3048;
-export const kgsPerLbs = 2.20462;
+export function isImperial() {
+    return imperial;
+}
+
+
+export const milesPerKm = 1000 / 1609.344;
+export const feetPerMeter = 1 / 0.3048;
+export const poundsPerKg = 2.20462;
 
 const hdUnits = {
     year: 'year',
@@ -30,6 +35,37 @@ const hdUnits = {
 };
 
 const humanEmpty = '-';
+
+export const humanDateTimeFormats = {
+    date: {
+        long: {year: 'numeric', month: 'long', day: 'numeric'},
+        default: {year: 'numeric', month: 'short', day: 'numeric'},
+        day: {month: 'short', day: 'numeric'},
+        short: {year: 'numeric', month: 'numeric', day: 'numeric'},
+        shortDay: {month: 'numeric', day: 'numeric'},
+        monthYear: {year: 'numeric', month: 'short'},
+        month: {month: 'short'},
+        monthDay: {month: 'short', day: 'numeric'},
+        weekday: {weekday: 'short', month: 'short', day: 'numeric'},
+        weekdayYear: {weekday: 'short', year: 'numeric', month: 'short', day: 'numeric'},
+    },
+    time: {
+        short: {hour: 'numeric', minute: 'numeric'},
+        default: {hour: 'numeric', minute: 'numeric', second: 'numeric'},
+        ms: {hour: 'numeric', minute: 'numeric', second: 'numeric', fractionalSecondDigits: 3},
+        date: {weekday: 'short', hour: 'numeric', minute: 'numeric', timeZoneName: 'short'},
+    },
+    datetime: {
+        long: {year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: 'numeric'},
+        default: {year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: 'numeric'},
+        day: {month: 'short', day: 'numeric', hour: 'numeric', minute: 'numeric'},
+        short: {year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric'},
+        shortDay: {month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric'},
+        weekday: {year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: 'numeric',
+                  weekday: 'short'},
+        weekdayDay: {month: 'short', day: 'numeric', hour: 'numeric', minute: 'numeric', weekday: 'short'},
+    }
+};
 
 
 function _realNumber(n) {
@@ -71,15 +107,15 @@ function humanDuration(elapsed, options={}) {
                 humanNumber(Math.floor(elapsed / period));
             if (val !== '0' || (isLast && !stack.length)) {
                 key += val !== '1' ? 's' : '';
-                const unit = options.short ? hdUnits[key][0] : ` ${hdUnits[key]}`;
+                const unit = options.short ? hdUnits[key][0] : hdUnits[key];
                 const suffix = options.html ? `<abbr class="unit">${unit}</abbr>` : unit;
-                stack.push(`${val}${suffix}`);
+                stack.push(`${val}${!options.html && !options.short ? ' ' : ''}${suffix}`);
             }
             elapsed %= period;
         }
     }
     if (stack.length) {
-        return sign + stack.join(options.seperator || ', ');
+        return sign + stack.join(options.separator || ', ');
     } else {
         return '-';
     }
@@ -123,45 +159,79 @@ function humanRelTime(date, options={}) {
 }
 
 
-const _intlDateFormats = {
-    'long': new Intl.DateTimeFormat([], {year: 'numeric', month: 'long', day: 'numeric'}),
-    'default': new Intl.DateTimeFormat([], {year: 'numeric', month: 'short', day: 'numeric'}),
-    'short': new Intl.DateTimeFormat([], {year: 'numeric', month: 'numeric', day: 'numeric'}),
-    'shortDay': new Intl.DateTimeFormat([], {month: 'numeric', day: 'numeric'}),
-    'monthYear': new Intl.DateTimeFormat([], {year: 'numeric', month: 'short'}),
-    'month': new Intl.DateTimeFormat([], {month: 'short'}),
-    'monthDay': new Intl.DateTimeFormat([], {month: 'short', day: 'numeric'}),
-    'weekday': new Intl.DateTimeFormat([], {weekday: 'short', month: 'short', day: 'numeric'}),
-    'weekdayYear': new Intl.DateTimeFormat([], {weekday: 'short', year: 'numeric', month: 'short', day: 'numeric'}),
-};
 function humanDate(date, options={}) {
-    if (!(date instanceof Date)) {
-        date = new Date(date);
-    }
-    if (isNaN(date)) {
-        return humanEmpty;
-    }
-    const style = options.style || 'default';
-    return _intlDateFormats[style].format(date);
+    const format = humanDateTimeFormats.date[options.style || 'default'];
+    return _humanDateTimeFormat(date, format, options);
 }
 
 
-const _intlTimeFormats = {
-    'default': new Intl.DateTimeFormat([], {hour: 'numeric', minute: 'numeric', second: 'numeric'}),
-};
 function humanTime(date, options={}) {
+    const format = humanDateTimeFormats.time[options.style || 'default'];
+    return _humanDateTimeFormat(date, format, options);
+}
+
+
+function humanDateTime(date, options={}) {
+    if (!(date instanceof Date)) {
+        date = new Date(date);
+    }
+    const now = new Date();
+    if (now.getYear() === date.getYear() &&
+        now.getMonth() === date.getMonth() &&
+        now.getDate() === date.getDate()) {
+        const time = humanTime(date, {...options, style: options.today_style});
+        if (options.concise) {
+            return time;
+        }
+        const today = hdUnits.today;
+        const Today = today.substr(0, 1).toLocaleUpperCase() + today.substr(1);
+        return `${Today}, ${time}`;
+    }
+    let style = options.style;
+    if (options.concise && now.getYear() === date.getYear()) {
+        if (style) {
+            humanDateTimeFormats.datetime[style + 'Day'];
+            style += 'Day';
+        } else {
+            style = 'day';
+        }
+    }
+    const format = humanDateTimeFormats.datetime[style || 'default'];
+    return _humanDateTimeFormat(date, format, options);
+}
+
+
+const _dtFormatters = new Map();
+function _humanDateTimeFormat(date, format, options) {
     if (!(date instanceof Date)) {
         date = new Date(date);
     }
     if (isNaN(date)) {
         return humanEmpty;
     }
-    const style = options.style || 'default';
-    return _intlTimeFormats[style].format(date);
+    let formatter = _dtFormatters.get(format);
+    if (!formatter) {
+        formatter = new Intl.DateTimeFormat([], format);
+        _dtFormatters.set(format, formatter);
+    }
+    if (options.parts) {
+        return formatter.formatToParts(date);
+    } else if (!options.html) {
+        return formatter.format(date);
+    } else {
+        return partsToHTML(formatter.formatToParts(date).map(x => ({
+            ...x,
+            type: {literal: 'seperator', dayPeriod: 'unit'}[x.type] || 'value',
+            name: x.type,
+        })));
+    }
 }
 
 
 function humanTimer(elapsed, options={}) {
+    if (options.suffixOnly) {
+        return _realNumber(elapsed) && options.suffix || '';
+    }
     if (!_realNumber(elapsed)) {
         return humanEmpty;
     }
@@ -176,56 +246,49 @@ function humanTimer(elapsed, options={}) {
     }
     const hours = elapsed / 3600 | 0;
     const mins = elapsed % 3600 / 60 | 0;
-    const secsStr = (elapsed % 60 | 0).toString();
-    const msStr = options.ms ? '.' + Math.round(elapsed % 1 * 1000).toString().padStart(3, '0') : '';
-    if (hours) {
-        return `${sign}${hours}:${mins.toString().padStart(2, '0')}:${secsStr.padStart(2, '0')}${msStr}`;
-    } else if (mins || options.long) {
-        return `${sign}${mins}:${secsStr.padStart(2, '0')}${msStr}`;
-    } else {
-        return `${sign}${secsStr}${msStr}`;
-    }
-}
-
-
-const _intlDateTimeFormats = {
-    'long': new Intl.DateTimeFormat([], {
-        year: 'numeric', month: 'long', day: 'numeric',
-        hour: 'numeric', minute: 'numeric'
-    }),
-    'default': new Intl.DateTimeFormat([], {
-        year: 'numeric', month: 'short', day: 'numeric',
-        hour: 'numeric', minute: 'numeric'
-    }),
-    'short': new Intl.DateTimeFormat([], {
-        year: 'numeric', month: 'numeric', day: 'numeric',
-        hour: 'numeric', minute: 'numeric'
-    }),
-    'weekday': new Intl.DateTimeFormat([], {
-        weekday: 'short',
-        year: 'numeric', month: 'short', day: 'numeric',
-        hour: 'numeric', minute: 'numeric'
-    }),
-};
-function humanDateTime(date, options={}) {
-    if (!(date instanceof Date)) {
-        date = new Date(date);
-    }
-    const now = new Date();
-    if (now.getDate() === date.getDate() &&
-        now.getMonth() === date.getMonth() &&
-        now.getFullYear() === date.getFullYear()) {
-        const time = humanTime(date, {...options, style: 'default'});
-        if (options.concise) {
-            return time;
+    const parts = [{type: 'value', name: 'sign', value: sign}];
+    switch (true) {
+        case !!(hours || options.full):
+            parts.push({type: 'value', name: 'hours', value: hours.toString()},
+                       {type: 'seperator', name: 'hours', value: ':'});
+            // falls through
+        case !!(mins || options.long || options.full):
+            parts.push({type: 'value', name: 'minutes', value: mins.toString().padStart(2, '0')},
+                       {type: 'seperator', name: 'minutes', value: ':'});
+            // falls through
+        default: {
+            const s = (elapsed % 60 | 0).toString();
+            parts.push({type: 'value', name: 'seconds', value: parts.length > 1 ? s.padStart(2, '0') : s});
         }
-        const today = hdUnits.today;
-        const Today = today.substr(0, 1).toLocaleUpperCase() + today.substr(1);
-        return [Today, time].join(', ');
     }
-    const style = options.style || 'default';
-    return _intlDateTimeFormats[style].format(date);
+    if (options.ms) {
+        const value = Math.round(elapsed % 1 * 1000).toString().padStart(3, '0');
+        parts.push({type: 'seperator', name: 'milliseconds', value: '.'},
+                   {type: 'value', name: 'milliseconds', value});
+    }
+    if (options.suffix) {
+        if (options.separator) {
+            parts.push({type: 'seperator', name: 'suffix', value: options.separator});
+        }
+        parts.push({type: 'unit', name: 'suffix', value: options.suffix});
+    }
+    if (options.parts) {
+        return parts;
+    } else if (options.html) {
+        return partsToHTML(parts);
+    } else {
+        return parts.map(x => x.value).join('');
+    }
 }
+
+
+function partsToHTML(parts) {
+    const tags = {value: 'span', seperator: 'span', unit: 'abbr'};
+    const inner = parts.map(x =>
+        `<${tags[x.type]} class="${x.type} ${x.name}">${x.value}</${tags[x.type]}>`).join('');
+    return `<localized style="display: contents">${inner}</localized>`;
+}
+
 
 
 const _utcSundayRef = new Date(1638700000000);
@@ -237,118 +300,134 @@ function humanDayOfWeek(sunOfft, options={}) {
 }
 
 
-function _humanNumber(value, precision, fixed) {
+function _humanNumber(value, options) {
     if (!_realNumber(value)) {
         return humanEmpty;
     }
-    let n = Number(value);
+    const n = Number(value);
+    const p = options.precision || 0;
     const v = n.toLocaleString(undefined, {
         useGrouping: n >= 10000 || n <= -10000,
-        maximumFractionDigits: precision,
-        minimumFractionDigits: fixed ? precision : undefined,
+        maximumFractionDigits: p,
+        minimumFractionDigits: options.fixed ? p : undefined,
     });
-    return v === '-0' ? '0' : v;
+    const sep = options.suffix && options.separator || '';
+    const suffix = options.suffix ?
+        options.html ? `<abbr class="unit">${options.suffix}</abbr>` : options.suffix :
+        '';
+    return (v === '-0' ? '0' : v) + sep + suffix;
 }
 
 
 const _hnLRU = new LRUCache(4096 * 16);
 function humanNumber(value, options={}) {
-    const precision = options.precision || 0;
-    const sep = options.seperator || '';
-    if (!precision) {
-        // Improve LRU hit rate..
-        value = Math.round(value);
+    if (options.suffixOnly) {
+        return _realNumber(value) && options.suffix || '';
     }
-    const sig = `${typeof value} ${value} ${precision} ${options.fixed} ${options.suffix} ${options.html} ${sep}`;
-    if (!_hnLRU.has(sig)) {
-        let r = _humanNumber(value, precision, options.fixed);
-        if (typeof options.suffix === 'string') {
-            r = r + sep + (options.html ? `<abbr class="unit">${options.suffix}</abbr>` : options.suffix);
-        }
+    const p = options.precision || 0;
+    const t = typeof value;
+    // Improve LRU hit rate..
+    const sv = (t === 'number' && !p) ? Math.round(value) : value;
+    const sig = `${t} ${sv} ${p} ${options.fixed} ${options.suffix} ${options.html} ${options.separator}`;
+    let r = _hnLRU.get(sig);
+    if (r === undefined) {
+        r = _humanNumber(value, options);
         _hnLRU.set(sig, r);
-        return r;
-    } else {
-        return _hnLRU.get(sig);
     }
+    return r;
 }
 
 
 function humanPower(p, options={}) {
-    if (!_realNumber(p)) {
-        return humanEmpty;
+    if (options.suffix === true || options.suffixOnly) {
+        options.suffix = 'w';
     }
-    const sep = options.suffix && options.seperator || '';
-    const suffix = options.suffix ? options.html ? `<abbr class="unit">w</abbr>` : 'w' : '';
-    return humanNumber(p, options) + sep + suffix;
+    return humanNumber(p, options);
 }
 
 
 function humanWkg(wkg, options={}) {
-    if (!_realNumber(wkg)) {
-        return humanEmpty;
+    if (options.suffix === true || options.suffixOnly) {
+        options.suffix = 'w/kg';
     }
-    const sep = options.suffix && options.seperator || '';
-    const suffix = options.suffix ? options.html ? `<abbr class="unit">w/kg</abbr>` : 'w/kg' : '';
-    return humanNumber(wkg, {precision: 1, ...options}) + sep + suffix;
+    return humanNumber(wkg, {precision: 1, fixed: true, ...options});
 }
 
 
 function humanPace(kph, options={}) {
-    if (!_realNumber(kph)) {
-        return humanEmpty;
-    }
-    const sep = options.suffix && options.seperator || '';
     const sport = options.sport || 'cycling';
-    if (sport === 'running') {
-        const unit = imperial ? '/mi' : '/km';
-        const suffix = options.suffix ? options.html ? `<abbr class="unit">${unit}</abbr>` : unit : '';
-        return humanTimer(3600 / (imperial ? kph * 1000 / metersPerMile : kph), options) + sep + suffix;
-    } else {
-        const unit = imperial ? 'mph' : 'kph';
-        const suffix = options.suffix ? options.html ? `<abbr class="unit">${unit}</abbr>` : unit : '';
-        return humanNumber(imperial ? kph * 1000 / metersPerMile : kph,
-            {fixed: true, ...options}) + sep + suffix;
+    let fixed;
+    let value;
+    let humanFunc = humanNumber;
+    if (_realNumber(kph)) {
+        if (sport === 'running') {
+            if (options.suffix === true || options.suffixOnly) {
+                options.suffix = imperial ? '/mi' : '/km';
+            }
+            value = 3600 / (imperial ? kph * milesPerKm : kph);
+            humanFunc = humanTimer;
+        } else {
+            if (options.suffix === true || options.suffixOnly) {
+                options.suffix = imperial ? 'mph' : 'kph';
+            }
+            fixed = true;
+            value = imperial ? kph * milesPerKm : kph;
+        }
     }
+    return humanFunc(value, {fixed, ...options});
 }
 
 
-function humanDistance(meters, options={}) {
-    if (!_realNumber(meters)) {
-        return humanEmpty;
+function humanDistance(m, options={}) {
+    let value;
+    let precision;
+    if (_realNumber(m)) {
+        if (Math.abs(m) < 1000) {
+            if (options.suffix === true || options.suffixOnly) {
+                options.suffix = imperial ? 'ft' : 'm';
+            }
+            precision = 0;
+            value = imperial ? m * feetPerMeter : m;
+        } else {
+            if (options.suffix === true || options.suffixOnly) {
+                options.suffix = imperial ? 'mi' : 'km';
+            }
+            precision = 1;
+            value = imperial ? m / 1000 * milesPerKm : m / 1000;
+        }
+    } else {
+        value = NaN;
     }
-    const unit = imperial ? 'mi' : 'km';
-    const sep = options.suffix && options.seperator || '';
-    const suffix = options.suffix ? options.html ? `<abbr class="unit">${unit}</abbr>` : unit : '';
-    return humanNumber(imperial ? meters / metersPerMile : meters / 1000,
-        {fixed: true, precision: 1, ...options}) + sep + suffix;
+    return humanNumber(value, {fixed: true, precision, ...options});
 }
 
 
 function humanWeight(kg, options={}) {
-    if (!_realNumber(kg)) {
-        return humanEmpty;
+    if (options.suffix === true || options.suffixOnly) {
+        options.suffix = imperial ? 'lbs' : 'kg';
     }
-    const unit = imperial ? 'lbs' : 'kg';
-    const sep = options.suffix && options.seperator || '';
-    const suffix = options.suffix ? options.html ? `<abbr class="unit">${unit}</abbr>` : unit : '';
-    return humanNumber(imperial ? kg * kgsPerLbs : kg,
-        {precision: 1, ...options}) + sep + suffix;
+    const value = _realNumber(kg) ? imperial ? kg * poundsPerKg : kg : NaN;
+    return humanNumber(value, {precision: 1, ...options});
 }
 
 
 function humanWeightClass(kg, options={}) {
-    if (!_realNumber(kg)) {
-        return humanEmpty;
+    if (options.suffix === true || options.suffixOnly) {
+        options.suffix = imperial ? 'lbs' : 'kg';
     }
-    const unit = imperial ? 'lbs' : 'kg';
-    const sep = options.suffix && options.seperator || '';
-    const suffix = options.suffix ? options.html ? `<abbr class="unit">${unit}</abbr>` : unit : '';
-    const v = imperial ? kg * kgsPerLbs : kg;
-    const range = imperial ? 20 : 10;
-    const vOfRange = v / range;
-    const lower = Math.floor(vOfRange) * range;
-    const upper = (vOfRange % 1) ? Math.ceil(vOfRange) * range : (vOfRange + 1) * range;
-    return `${humanNumber(lower)} - ${humanNumber(upper)}${sep}${suffix}`;
+    if (_realNumber(kg)) {
+        const range = imperial ? 20 : 10;
+        const v = imperial ? kg * poundsPerKg : kg;
+        const vOfRange = v / range;
+        const lower = Math.floor(vOfRange) * range;
+        const upper = (vOfRange % 1) ? Math.ceil(vOfRange) * range : (vOfRange + 1) * range;
+        const span = options.html ?
+            '<abbr class="unit" style="padding: 0; margin: 0 0.12em;">↔</abbr>' :
+            '↔';
+        return `${humanNumber(lower)}${span}${humanNumber(upper, options)}`;
+    } else {
+        return humanNumber(NaN, options);
+    }
 }
 
 
@@ -362,20 +441,17 @@ function humanHeight(cm, options={}) {
         const inches = Math.round((feet % 1) * 12);
         return `${wholeFeet}'` + (inches ? ` ${inches}"` : '');
     } else {
-        const unit = options.html ? '<abbr class="unit">m</abbr>' : 'm';
+        const unit = options.suffix ? options.html ? '<abbr class="unit">m</abbr>' : 'm' : '';
         return (cm / 100).toFixed(2) + unit;
     }
 }
 
 
-function humanElevation(meters, options={}) {
-    if (!_realNumber(meters)) {
-        return humanEmpty;
+function humanElevation(m, options={}) {
+    if (options.suffix === true || options.suffixOnly) {
+        options.suffix = imperial ? 'ft' : 'm';
     }
-    const unit = imperial ? 'ft' : 'm';
-    const sep = options.suffix && options.seperator || '';
-    const suffix = options.suffix ? options.html ? `<abbr class="unit">${unit}</abbr>` : unit : '';
-    return humanNumber(imperial ? meters * metersPerFoot : meters, options) + sep + suffix;
+    return humanNumber(_realNumber(m) ? imperial ? m * feetPerMeter : m : NaN, options);
 }
 
 
@@ -387,39 +463,10 @@ const placeSuffixes = {
     other: 'th',
 };
 function humanPlace(p, options={}) {
-    if (!p) {
-        return options.suffixOnly ? '' : humanEmpty;
+    if (options.suffix === true || options.suffixOnly) {
+        options.suffix = placeSuffixes[placePluralRules.select(p)];
     }
-    const suffix = placeSuffixes[placePluralRules.select(p)];
-    if (options.suffixOnly) {
-        return suffix;
-    }
-    const hp = humanNumber(p);
-    if (options.html) {
-        return `${hp}<abbr class="unit">${suffix}</abbr>`;
-    } else {
-        return `${hp}${suffix}`;
-    }
-}
-
-
-export function weightUnconvert(localeWeight) {
-    return imperial ? localeWeight / kgsPerLbs : localeWeight;
-}
-
-
-export function elevationUnconvert(localeEl) {
-    return imperial ? localeEl * metersPerFoot : localeEl;
-}
-
-
-export function velocityUnconvert(localeV, options={}) {
-    throw new Error("TBD");
-}
-
-
-export function distanceUnconvert(localeDist) {
-    return imperial ? localeDist * metersPerMile : localeDist * 1000;
+    return humanNumber(p, options);
 }
 
 

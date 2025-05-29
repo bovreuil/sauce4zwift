@@ -102,7 +102,7 @@ function rankWeightedRatio(duration) {
 }
 
 
-export function rankLevel(duration, p, wp, weight, gender) {
+export function rankLevel(duration, p, wp, weight, gender='male', options) {
     const high = _rankScaler(duration, rankConstants[gender].high);
     const low = _rankScaler(duration, rankConstants[gender].low);
     const weightedRatio = (!wp || wp < p) ? 0 : rankWeightedRatio(duration);
@@ -113,13 +113,13 @@ export function rankLevel(duration, p, wp, weight, gender) {
         weightedRatio,
         weightedPower,
         wKg,
+        ...options,
     };
 }
 
 
-export function rankBadge({level, weightedRatio, weightedPower, wKg}) {
-    const suffix = (document.documentElement.classList.contains('sauce-theme-dark')) ?
-        '-darkbg.png' : '.png';
+export function rankBadge({level, weightedRatio, weightedPower, wKg, darkMode}) {
+    const suffix = darkMode ? '-darkbg.png' : '.png';
     let lastRankLevel = 1;
     for (const x of rankLevels) {
         if (level >= x.levelRequirement) {
@@ -146,8 +146,8 @@ export function rankBadge({level, weightedRatio, weightedPower, wKg}) {
 }
 
 
-export function rank(duration, p, wp, weight, gender) {
-    return rankBadge(rankLevel(duration, p, wp, weight, gender));
+export function rank(duration, p, wp, weight, gender, options) {
+    return rankBadge(rankLevel(duration, p, wp, weight, gender, options));
 }
 
 
@@ -331,28 +331,30 @@ export function peakPower(period, timeStream, wattsStream, options={}) {
         return;
     }
     return roll.importReduce(timeStream, wattsStream, options.activeStream, x => x.avg(),
-        (cur, lead) => cur >= lead);
+                             (cur, lead) => cur >= lead);
 }
 
 
 export function peakNP(period, timeStream, wattsStream, options={}) {
-    const roll = correctedRollingPower(timeStream, period,
-        {inlineNP: true, active: true, ...options});
+    const roll = correctedRollingPower(
+        timeStream, period, {inlineNP: true, active: true, ...options});
     if (!roll) {
         return;
     }
-    return roll.importReduce(timeStream, wattsStream, options.activeStream, x => x.np(),
+    return roll.importReduce(
+        timeStream, wattsStream, options.activeStream, x => x.np(),
         (cur, lead) => cur >= lead, {inlineNP: false});
 }
 
 
 export function peakXP(period, timeStream, wattsStream, options={}) {
-    const roll = correctedRollingPower(timeStream, period,
-        {inlineXP: true, active: true, ...options});
+    const roll = correctedRollingPower(
+        timeStream, period, {inlineXP: true, active: true, ...options});
     if (!roll) {
         return;
     }
-    return roll.importReduce(timeStream, wattsStream, options.activeStream, x => x.xp(),
+    return roll.importReduce(
+        timeStream, wattsStream, options.activeStream, x => x.xp(),
         (cur, lead) => cur >= lead, {inlineXP: false});
 }
 
@@ -638,6 +640,7 @@ export function cyclingPowerVelocitySearch({power, ...args}) {
                         for (let v = iv + smallStep;; v += smallStep) {
                             const est = cyclingPowerEstimate({velocity: v, ...args});
                             results.push([v, est]);  // Always include the test case.
+                            // eslint-disable-next-line max-depth
                             if (Math.abs(est.watts - power) < Math.abs(bestEst.watts - power)) {
                                 bestEst = est;
                             } else {
@@ -685,8 +688,8 @@ export function cyclingPowerVelocitySearch({power, ...args}) {
             const rangeVs = refineRange(lower, upper);
             const innerRanges = rangeVs.length >= 4 && findLocalRanges(rangeVs);
             if (innerRanges && innerRanges.length > 1) {
-                for (const [lower, upper] of innerRanges) {
-                    search(refineRange(lower, upper));
+                for (const [l, u] of innerRanges) {
+                    search(refineRange(l, u));
                 }
             } else {
                 const est = cyclingPowerEstimate({velocity: rangeVs[0], ...args});
@@ -773,6 +776,9 @@ export function calcWPrimeBalDifferential(wattsStream, timeStream, cp, wPrime) {
         } else {
             const pNum = p || 0;  // convert null and undefined to 0.
             wBal += pNum < cp ? (cp - pNum) * (wPrime - wBal) / wPrime : cp - pNum;
+            if (wBal > wPrime) {
+                wBal = wPrime;
+            }
         }
         if (!(p instanceof sauce.data.Pad)) {
             // Our output stream should align with the input stream, not the corrected
@@ -785,11 +791,11 @@ export function calcWPrimeBalDifferential(wattsStream, timeStream, cp, wPrime) {
 
 
 export function makeIncWPrimeBalDifferential(cp, wPrime) {
-    const epsilon = 0.000001;
     let wBal = wPrime;
-    return p => {
+    return (p, elapsed=1) => {
         if (p instanceof sauce.data.Break) {
             // Refill wBal while we have a break.
+            const epsilon = 0.000001;
             for (let j = 0; j < p.pad; j++) {
                 wBal += cp * (wPrime - wBal) / wPrime;
                 if (wBal >= wPrime - epsilon) {
@@ -798,8 +804,11 @@ export function makeIncWPrimeBalDifferential(cp, wPrime) {
                 }
             }
         } else {
-            const pNum = p || 0;  // convert null and undefined to 0.
-            wBal += pNum < cp ? (cp - pNum) * (wPrime - wBal) / wPrime : cp - pNum;
+            const cpDelta = (cp - (p || 0)) * elapsed;
+            wBal += cpDelta > 0 ? cpDelta * (wPrime - wBal) / wPrime : cpDelta;
+            if (wBal > wPrime) {
+                wBal = wPrime;
+            }
         }
         return wBal;
     };
@@ -834,13 +843,40 @@ export function calcPwHrDecoupling(wattsStream, timeStream, hrStream) {
 
 
 export function cogganZones(ftp) {
+    // from is exclusive and to is inclusive..
+    return [
+        {zone: "Z1", from: 0, to: ftp * 0.55},          // Active Recovery
+        {zone: "Z2", from: ftp * 0.55, to: ftp * 0.75}, // Endurance
+        {zone: "Z3", from: ftp * 0.75, to: ftp * 0.90}, // Tempo
+        {zone: "Z4", from: ftp * 0.90, to: ftp * 1.05}, // Threshold
+        {zone: "Z5", from: ftp * 1.05, to: ftp * 1.20}, // V02Max
+        {zone: "Z6", from: ftp * 1.20, to: ftp * 1.50}, // Anaerobic
+        {zone: "Z7", from: ftp * 1.50, to: null},       // Neuromuscular
+    ];
+}
+
+
+export function polarizedZones(ftp) {
+    // from is exclusive and to is inclusive..
+    return [
+        {zone: "Z1", from: ftp * 0.40, to: ftp * 0.80}, // Low intensity
+        {zone: "Z2", from: ftp * 0.80, to: ftp * 1.00}, // Moderate Intensity
+        {zone: "Z3", from: ftp * 1.00, to: null},       // High Intensity
+    ];
+}
+
+
+export function sweetspotZone(ftp, options={}) {
+    const type = options.type || 'fascat';
+    // from is exclusive and to is inclusive..
+    const ranges = {
+        coggan: [0.88, 0.93],
+        fascat: [0.84, 0.97],
+    };
     return {
-        z1: ftp * 0.55, // Active Recovery
-        z2: ftp * 0.75, // Endurance
-        z3: ftp * 0.90, // Tempo
-        z4: ftp * 1.05, // Threshold
-        z5: ftp * 1.20, // V02Max
-        z6: ftp * 1.50, // Anaerobic
-        z7: Infinity,   // Neuromuscular
+        zone: 'SS',
+        from: ftp * ranges[type][0],
+        to: ftp * ranges[type][1],
+        overlap: true,
     };
 }

@@ -6,14 +6,16 @@
 
         <title>System Message - Sauce for Zwift™</title>
 
-        <script type="module">
-            import {main} from './src/system-message.mjs';
-            main();
-        </script>
+        <script src="./src/preloads.js"></script>
 
         <link id="favicon" rel="shortcut icon" href="images/favicon.png"/>
         <link rel="stylesheet" href="css/common.css"/>
         <link rel="stylesheet" href="css/system-message.css"/>
+
+        <script type="module">
+            import {main} from './src/system-message.mjs';
+            main();
+        </script>
     </head>
     <body class="transparent-bg">
         <div id="content">

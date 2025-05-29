@@ -6,17 +6,25 @@ html {
             background: transparent;
         }
     }
+
+    --message-background-opacity: 0.7; // Just a fallback
 }
 
 body {
     color: black;
 }
 
+abbr.unit {
+    font-weight: 400;
+    opacity: 0.94;
+    font-size: 0.88em;
+    padding-left: 0.1em;
+}
+
 #content {
     align-items: flex-start;
     padding: 0.2rem;
     overflow-y: auto;
-    overflow-y: overlay; // chromium only, but way better
     scroll-snap-type: y proximity;
 
     &.reverse-order {
@@ -37,19 +45,22 @@ body {
         scroll-snap-align: end;
         scroll-margin-block-end: 1rem;
     }
+    &.right-align {
+        align-items: flex-end;
+    }
 }
 
 .entry {
     --message-hue: 0deg;
     flex: 0 0 auto;
     display: flex;
-    background-color: hsla(var(--message-hue), 80%, 40%, 0.7);
+    background-color: hsl(var(--message-hue) 80% 40% / var(--message-background-opacity));
     color: #fff;
     align-items: flex-start;  /* workaround a scroll issue with large content */
     font-size: 0.85em;
     margin-bottom: 0.3rem;
     border-radius: 0.33em;
-    box-shadow: 1px 1px 5px 0 #0004;
+    box-shadow: 1px 1px 5px 0 rgb(0 0 0 / calc(var(--message-background-opacity) * 0.5));
     max-height: 0;
     transition: max-height 1s, opacity var(--fadeout-time);
     overflow: hidden;
@@ -58,12 +69,11 @@ body {
         background-color: #3336;
 
         .content {
-            padding: 0.2em 1em;
+            padding: 0.2em 0.5em;
             font-size: 0.8em;
             justify-content: center;
             font-variant: all-small-caps;
-            font-weight: bold;
-            opacity: 0.9;
+            font-weight: 500;
         }
     }
 
@@ -98,10 +108,11 @@ body {
         max-height: 100%;
 
         > .live {
-            min-width: 24ch;
-            font-size: 0.6em;
+            font-size: 0.64em;
+            font-weight: 420;
             padding: 0.1em 0.3rem 0.4em 0;
             flex: 0 0 auto;
+            font-variant-numeric: tabular-nums;
         }
 
         > .live:empty {
@@ -133,7 +144,7 @@ body {
             padding-left: 0.5em;
             flex: 1 0 auto;
             text-align: end;
-            opacity: 0.7;
+            opacity: 0.9;
         }
     }
 
@@ -141,7 +152,6 @@ body {
         margin-right: 0.3rem;
         margin-bottom: 0.3rem;
         overflow-y: auto;
-        overflow-y: overlay; // chromium only, but way better
         scroll-snap-type: y proximity;
 
         > .chunk {

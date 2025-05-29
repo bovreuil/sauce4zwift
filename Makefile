@@ -1,12 +1,12 @@
 default: build
 
 PACKAGES := node_modules/.build
-BUILD := .build
+BUILD := build.json
 
 ifeq ($(OS),Windows_NT)
   WINBLOWS := true
-  SHELL := powershell.exe
-  .SHELLFLAGS := -C
+  #SHELL := powershell.exe
+  #.SHELLFLAGS := -C
 else
   T := $(shell uname -s)
   ifeq ($(T),Linux)
@@ -24,14 +24,17 @@ ifndef WINBLOWS
   PAGES_SRC := $(shell find pages -type f)
 endif
 
+
 $(PACKAGES): package.json
 	npm install
 	echo "" > $@
 
-$(BUILD): $(PAGES_SRC) $(PACKAGES) sass deps Makefile .git/index
-	echo "" > $@
+
+$(BUILD): $(PAGES_SRC) $(PACKAGES) sass deps Makefile .git/index test
+	node tools/bin/buildenv $@
 
 build: $(BUILD)
+
 
 run: $(BUILD)
 	npm start
@@ -42,9 +45,6 @@ run-debug: $(BUILD)
 run-debug-brk: $(BUILD)
 	npm run start-debug-brk
 
-lint:
-	$(NPATH)/eslint --ext .mjs --config .eslintrc.modules.json src shared pages/src
-	$(NPATH)/eslint src
 
 unpacked: $(BUILD)
 ifndef WINBLOWS
@@ -62,37 +62,38 @@ endif
 
 publish: $(BUILD)
 ifndef WINBLOWS
-	@echo
-	@echo Double check this git status is acceptable...
-	@echo
-	git status
-	@echo
-	@sleep 5
 	GH_TOKEN="$${GH_TOKEN_SAUCE4ZWIFT_RELEASE}" npm run publish
 else
 	npm run publish
 endif
 
+publish-docker-linux-native:
+	docker build --build-arg arch=amd64 -t linux-s4z-build -f ./build/linux.Dockerfile .
+	docker run -it -v $$HOME/.git-credentials:/root/.git-credentials \
+		-e GH_TOKEN_SAUCE4ZWIFT_RELEASE -v $(CURDIR)/dist/docker-dist:/sauce4zwift/dist linux-s4z-build make publish
+
+_publis-docker-linux-arm_DO_NOT_USE:
+	# Artifacts collide with non arm builds.  I think this is possible to avoid but haven't dived in
+	# Also this takes like an hour or more to finish on highend 2023 AMD CPU, yikes.
+	docker build --build-arg arch=arm64 -t linux-s4z-build-arm -f ./build/linux.Dockerfile .
+	docker run -it -v $$HOME/.git-credentials:/root/.git-credentials \
+		-e GH_TOKEN_SAUCE4ZWIFT_RELEASE linux-s4z-build-arm make publish
+
+
 deps:
-ifndef WINBLOWS
-	mkdir -p pages/deps/flags
-	mkdir -p shared/deps/data
-else
-	mkdir -f pages/deps/flags
-	mkdir -f shared/deps/data
-endif
-	cp node_modules/echarts/dist/echarts.esm.js pages/deps/src/echarts.mjs
-	cp -r node_modules/world_countries_lists/data/flags/64x64/*.png pages/deps/flags/
-	cp node_modules/world_countries_lists/data/countries/_combined/world.json shared/deps/data/countries.json
-	cp node_modules/zwift-data/lib/esm/routes.js shared/deps/routes.mjs
-	cp node_modules/zwift-data/lib/esm/segments.js shared/deps/segments.mjs
-	-cp node_modules/zwift-utils/dist/segments*.json shared/deps/data/
+	$(MAKE) -j 32 -C pages/deps
+	$(MAKE) -j 32 -C shared/deps
+
 
 sass:
 	$(NPATH)/sass pages/scss:pages/css
 
 sass-watch:
 	$(NPATH)/sass pages/scss:pages/css --watch
+
+
+lint:
+	$(NPATH)/eslint src shared pages/src
 
 lint-watch:
 ifndef WINBLOWS
@@ -108,17 +109,19 @@ else
 	@echo Unsupported on winblows
 endif
 
-clean:
-ifndef WINBLOWS
-	rm -rf pages/deps/src/*
-	rm -rf pages/deps/flags
-	rm -rf shared/deps/*
-	rm -f $(BUILD)
-else
-	-rm -r -fo -ErrorAction SilentlyContinue pages/deps/src/*
-	-rm -r -fo -ErrorAction SilentlyContinue pages/deps/flags
-	-rm -r -fo -ErrorAction SilentlyContinue shared/deps/*
-	-rm -fo -ErrorAction SilentlyContinue $(BUILD)
-endif
 
-.PHONY: build pack publish lint sass deps clean
+realclean: clean
+	rm -rf node_modules
+	
+clean:
+	rm -f $(BUILD)
+	rm -rf pages/css
+	$(MAKE) -C shared/deps clean
+	$(MAKE) -C pages/deps clean
+
+
+test:
+	npm run test
+
+
+.PHONY: build packed unpacked publish lint sass deps clean realclean test

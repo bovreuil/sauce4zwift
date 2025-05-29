@@ -1,52 +1,68 @@
 const {ipcRenderer, contextBridge} = require('electron');
 
-document.addEventListener('DOMContentLoaded', () => {
-    // Step 1 page.
-    const link = document.querySelector('.patron-link');
-    if (link) {
-        link.addEventListener('danced', () => {
-            const q = new URLSearchParams({
-                response_type: 'code',
-                client_id: '5pxCmg6NBYOjHDVBL8XWJ4tzbwb_LxFO_pUDONDlZkPD0EOnz2NfRDUblE6J2k-C',
-                redirect_uri: 'https://saucellc.io/sauce4zwift-patron-link',
-                scope: 'identity campaigns.members',
-            });
-            location.assign(`https://www.patreon.com/oauth2/authorize?${q}`);
-        });
-    }
-    const code = document.querySelector('.button.code');
-    if (code) {
-        code.addEventListener('click', ev => {
-            location.assign('patron-code.html');
-        });
-    }
+const authUrl = 'https://www.patreon.com/oauth2/authorize';
+const authArgs = {
+    response_type: 'code',
+    client_id: '5pxCmg6NBYOjHDVBL8XWJ4tzbwb_LxFO_pUDONDlZkPD0EOnz2NfRDUblE6J2k-C',
+    scope: 'identity campaigns.members',
+};
 
-    const special = document.querySelector('#specialtoken');
-    if (special) {
-        special.addEventListener('submit', ev => {
-            const token = ev.currentTarget.querySelector('input[name="specialtoken"]').value;
-            ipcRenderer.send('patreon-special-token', token);
-            ev.preventDefault();
-        });
-    }
+const meta = ipcRenderer.sendSync('getWindowMetaSync');
+contextBridge.exposeInMainWorld('isElectron', true);
+contextBridge.exposeInMainWorld('electron', {
+    context: {
+        ...meta.context,
+        id: 'patron-link',
+        spec: {},
+    },
+    ipcInvoke: (...args) => ipcRenderer.invoke(...args),
+    closeWindow: () => window.close(),
 });
 
-// Proxy the code from our public page https://saucellc.io/sauce4zwift-patron-link to 
-// the Renderer process for further processing.  The renderer will bounce them to the
-// proper internal page immediately.
+// Proxy the code from our public page to the renderer process for further processing.
+// The renderer will bounce them to the proper internal page immediately.
 document.addEventListener('patreon-auth-code', ev =>
     void ipcRenderer.send('patreon-auth-code', ev.detail));
 
 document.addEventListener('patreon-reset-session', ev =>
     void ipcRenderer.send('patreon-reset-session'));
 
-contextBridge.exposeInMainWorld('isElectron', true);
-contextBridge.exposeInMainWorld('electron', {
-    context: {
-        id: 'patron-link',
-        type: null,
-        spec: {},
-        frame: true
-    },
-    ipcInvoke: (...args) => ipcRenderer.invoke(...args),
+document.addEventListener('click', ev => {
+    const link = ev.target.closest('a[external][href]');
+    if (link) {
+        ev.preventDefault();
+        ipcRenderer.invoke('rpc', 'openExternalLink', link.href).catch(e =>
+            console.error('Error opening external page:', e));
+    }
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+    for (const x of  document.querySelectorAll('.button.patron-link')) {
+        const q = new URLSearchParams({
+            ...authArgs,
+            redirect_uri: 'https://www.sauce.llc/sauce4zwift-patron-link-v2',
+        });
+        x.href = `${authUrl}?${q}`;
+        x.addEventListener('click', () => {
+            // Slight delay to avoid flashing new content while an external window is opening
+            setTimeout(() => location.assign('patron-waiting.html'), 1000);
+        });
+    }
+    for (const x of document.querySelectorAll('.button.patron-link-legacy')) {
+        x.addEventListener('click', () => {
+            const q = new URLSearchParams({
+                ...authArgs,
+                redirect_uri: 'https://saucellc.io/sauce4zwift-patron-link',
+            });
+            location.assign(`${authUrl}?${q}`);
+        }, {capture: true});
+    }
+    const special = document.querySelector('#specialtoken');
+    if (special) {
+        special.addEventListener('submit', ev => {
+            ev.preventDefault();
+            const token = ev.currentTarget.querySelector('input[name="specialtoken"]').value;
+            ipcRenderer.send('patreon-special-token', token);
+        });
+    }
 });

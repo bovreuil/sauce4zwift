@@ -1,13 +1,12 @@
-import * as sauce from '../../shared/sauce/index.mjs';
+import * as locale from '../../shared/sauce/locale.mjs';
 import * as common from './common.mjs';
+import * as fields from './fields.mjs';
+
+common.enableSentry();
 
 const doc = document.documentElement;
-const L = sauce.locale;
+const L = locale;
 const H = L.human;
-let imperial = !!common.storage.get('/imperialUnits');
-L.setImperial(imperial);
-let eventMetric;
-let sport = 'cycling';
 
 common.settingsStore.setDefault({
     leftFields: 2,
@@ -17,158 +16,94 @@ common.settingsStore.setDefault({
     centerGapSize: 0,
 });
 
+const settings = common.settingsStore.get();
 
-function isRealNumber(v) {
-    return !(v == null || v === Infinity || v === -Infinity || isNaN(v));
-}
-
-
-function fmtPace(x) {
-    return H.pace(x, {sport, precision: 1});
-}
+const modSafeIds = new Map();
 
 
-function speedUnit() {
-    return sport === 'running' ? imperial ? '/mi' : '/km' : imperial ? 'mph' : 'kph';
-}
-
-
-function speedLabel() {
-    return sport === 'running' ? 'Pace' : 'Speed';
-}
-
-
-function shortDuration(x) {
-    return H.duration(x, {short: true});
-}
-
-const unit = x => `<abbr class="unit">${x}</abbr>`;
-
-
-function fmtDist(v) {
-    if (!isRealNumber(v)) {
-        return '-';
-    } else if (Math.abs(v) < 1000) {
-        const suffix = unit(imperial ? 'ft' : 'm');
-        return H.number(imperial ? v / L.metersPerFoot : v) + suffix;
-    } else {
-        return H.distance(v, {precision: 1, suffix: true, html: true});
+function updateButtonVis() {
+    for (const x of ['Analysis', 'Athletes', 'Events']) {
+        const btn = document.querySelector(`.controls .button[data-settings-key="${x}"]`);
+        if (!btn) {
+            console.error('Invalid button:', x);
+            continue;
+        }
+        btn.classList.toggle('hidden', settings[`hide${x}Button`] === true);
     }
 }
 
 
-function fmtElevation(v) {
-    if (!isRealNumber(v)) {
-        return '-';
-    }
-    const suffix = unit(imperial ? 'ft' : 'm');
-    return H.number(imperial ? v / L.metersPerFoot : v) + suffix;
-}
-
-
-function fmtDur(v) {
-    if (!isRealNumber(v)) {
-        return '-';
-    }
-    return H.timer(v, {long: true});
-}
-
-
-function fmtWkg(p, athlete) {
-    if (!isRealNumber(p) || !athlete || !athlete.ftp) {
-        return '-';
-    }
-    return H.number(p / athlete.weight, {precision: 1, fixed: true});
-}
-
-
-function fmtPct(p) {
-    if (!isRealNumber(p)) {
-        return '-';
-    }
-    return H.number(p * 100) + unit('%');
-}
-
-
-const _events = new Map();
-function getEventSubgroup(id) {
-    if (!_events.has(id)) {
-        _events.set(id, null);
-        common.rpc.getEventSubgroup(id).then(x => {
-            if (x) {
-                _events.set(id, x);
-            } else {
-                // leave it null but allow retry later
-                setTimeout(() => _events.delete(id), 30000);
-            }
-        });
-    }
-    return _events.get(id);
-}
-
-
-export async function main() {
+export function main() {
     common.initInteractionListeners();
+    common.setBackground(settings);
+    updateButtonVis();
+    let autoHidden;
     let lastData;
     let autoHideTimeout;
     doc.style.setProperty('--center-gap-size', common.settingsStore.get('centerGapSize') + 'px');
     let renderer = buildLayout();
-    common.settingsStore.addEventListener('changed', ev => {
-        for (const [k, v] of ev.data.changed.entries()) {
-            if (k === '/imperialUnits') {
-                imperial = v;
-                L.setImperial(imperial);
-                renderer.render();
-                return;
-            } else if (k === 'autoHideWindows') {
-                location.reload();  // Avoid state machine complications.
-                return;
-            } else if (k === 'centerGapSize') {
-                console.log("set gap", v);
-                doc.style.setProperty('--center-gap-size', `${v}px`);
-                renderer.render({force: true});
-                return;
+    common.settingsStore.addEventListener('set', ev => {
+        const {key, value} = ev.data;
+        if (key === '/imperialUnits') {
+            renderer.render();
+        } else if (key === 'autoHideWindows') {
+            location.reload();  // Avoid state machine complications.
+        } else if (key === 'centerGapSize') {
+            doc.style.setProperty('--center-gap-size', `${value}px`);
+            renderer.render({force: true});
+        } else if (key.match(/hide.+Button/)) {
+            updateButtonVis();
+        } else {
+            common.setBackground(settings);
+            if (renderer) {
+                renderer.stop();
+                renderer = null;
             }
+            renderer = buildLayout();
+            renderer.setData(lastData || {});
+            renderer.render();
         }
-        if (renderer) {
-            renderer.stop();
-            renderer = null;
-        }
-        renderer = buildLayout();
-        renderer.setData(lastData || {});
-        renderer.render();
     });
     document.querySelector('.button.show').addEventListener('click', () => {
-        doc.classList.remove('hidden');
+        doc.classList.remove('windows-hidden');
         if (window.isElectron) {
-            doc.classList.remove('auto-hidden');
+            doc.classList.remove('windows-auto-hidden');
+            console.debug("User requested show windows");
             autoHidden = false;
             common.rpc.showAllWindows();
         }
     });
     document.querySelector('.button.hide').addEventListener('click', () => {
-        doc.classList.add('hidden');
+        doc.classList.add('windows-hidden');
         if (window.isElectron) {
-            doc.classList.remove('auto-hidden');
+            doc.classList.remove('windows-auto-hidden');
+            console.debug("User requested hide windows");
             autoHidden = false;
             common.rpc.hideAllWindows();
         }
     });
     if (window.isElectron) {
-        document.querySelector('.button.quit').addEventListener('click', () => common.rpc.quit());
+        document.querySelector('.button.quit').addEventListener('click', () => {
+            if (confirm("Quit Sauce?")) {
+                common.rpc.quit();
+            }
+        });
     }
 
-    let autoHidden;
     function autoHide() {
+        if (doc.classList.contains('windows-hidden')) {
+            console.debug("Skip auto hide: hidden already");
+            return;
+        }
         autoHidden = true;
-        doc.classList.add('auto-hidden', 'hidden');
+        doc.classList.add('windows-auto-hidden', 'windows-hidden');
         console.debug("Auto hidding windows");
         common.rpc.hideAllWindows({autoHide: true});
     }
 
     function autoShow() {
         autoHidden = false;
-        doc.classList.remove('auto-hidden', 'hidden');
+        doc.classList.remove('windows-auto-hidden', 'windows-hidden');
         console.debug("Auto showing windows");
         common.rpc.showAllWindows({autoHide: true});
     }
@@ -179,20 +114,16 @@ export async function main() {
     }
     let lastUpdate = 0;
     common.subscribe('athlete/watching', watching => {
-        if (window.isElectron && common.settingsStore.get('autoHideWindows') &&
-            (watching.state.speed || watching.state.cadence || watching.state.power)) {
-            clearTimeout(autoHideTimeout);
-            if (autoHidden) {
-                autoShow();
+        if (window.isElectron && common.settingsStore.get('autoHideWindows')) {
+            if (watching.state.speed || watching.state.cadence || watching.state.power) {
+                clearTimeout(autoHideTimeout);
+                if (autoHidden) {
+                    autoShow();
+                }
+                autoHideTimeout = setTimeout(autoHide, autoHideWait);
             }
-            autoHideTimeout = setTimeout(autoHide, autoHideWait);
         }
         lastData = watching;
-        if (watching.state.eventSubgroupId) {
-            watching.eventSubgroup = getEventSubgroup(watching.state.eventSubgroupId);
-        }
-        sport = watching.state.sport || 'cycling';
-        eventMetric = watching.remainingMetric;
         renderer.setData(watching);
         const ts = Date.now();
         if (ts - lastUpdate > 500) {
@@ -207,264 +138,32 @@ export async function main() {
 
 function buildLayout() {
     const content = document.querySelector('#content');
-    const renderer = new common.Renderer(content, {locked: common.settingsStore.get('lockedFields')});
-    let count = 1;
+    const renderer = new common.Renderer(content, {
+        locked: common.settingsStore.get('lockedFields'),
+        id: 'normal',
+    });
+    const defaults = {
+        'left-0': 'rideons',
+        'left-1': 'energy',
+        'right-0': 'pwr-np',
+        'right-1': 'wbal',
+    };
     for (const side of ['left', 'right']) {
-        const fields = document.querySelector(`.fields.${side}`);
+        const fieldsEl = document.querySelector(`.fields.${side}`);
         const mapping = [];
-        fields.innerHTML = '';
+        fieldsEl.innerHTML = '';
         for (let i = 0; i < common.settingsStore.get(`${side}Fields`); i++) {
             const id = `${side}-${i}`;
-            fields.insertAdjacentHTML('beforeend', `
+            fieldsEl.insertAdjacentHTML('beforeend', `
                 <div class="field" data-field="${id}">
                     <div class="key"></div><div class="value"></div><abbr class="unit"></abbr>
                 </div>
             `);
-            mapping.push({id, default: count++});
+            mapping.push({id, default: defaults[id] || 'time-elapsed'});
         }
         renderer.addRotatingFields({
             mapping,
-            fields: [{
-                id: 'time-lap',
-                value: x => fmtDur((x.lap || x.stats) && (x.lap || x.stats).elapsedTime || 0),
-                key: 'Time <small>(lap)</small>',
-            }, {
-                id: 'time-elapsed',
-                value: x => fmtDur(x.stats && x.stats.elapsedTime || 0),
-                key: 'Elapsed',
-            }, {
-                id: 'rideons',
-                value: x => H.number(x.state && x.state.rideons),
-                key: 'Ride Ons',
-            }, {
-                id: 'energy',
-                value: x => H.number(x.state && x.state.kj),
-                key: 'Energy',
-                unit: 'kJ',
-            }, {
-                id: 'wbal',
-                value: x => (x.stats && x.stats.power.wBal != null && x.athlete && x.athlete.wPrime) ?
-                    common.fmtBattery(x.stats.power.wBal / x.athlete.wPrime) +
-                        H.number(x.stats.power.wBal / 1000, {precision: 1}) : '-',
-                key: 'W\'bal',
-                unit: 'kJ',
-            }, {
-                id: 'tss',
-                value: x => H.number(x.stats && x.stats.power.tss),
-                key: 'TSS',
-            }, {
-                id: 'weight',
-                value: x => H.weightClass(x.athlete && x.athlete.weight),
-                key: 'Weight',
-                unit: () => imperial ? 'lbs' : 'kg',
-            }, {
-                id: 'ftp',
-                value: x => H.number(x.athlete && x.athlete.ftp),
-                key: 'FTP',
-                unit: 'w'
-            }, {
-                id: 'spd-cur',
-                value: x => fmtPace(x.state && x.state.speed),
-                key: speedLabel,
-                unit: speedUnit,
-            }, {
-                id: 'spd-avg',
-                value: x => fmtPace(x.stats && x.stats.speed.avg),
-                key: () => `${speedLabel()} <small>(avg)</small>`,
-                unit: speedUnit,
-            }, {
-                id: 'spd-smooth-60',
-                value: x => fmtPace(x.stats && x.stats.speed.smooth[60]),
-                key: () => `${speedLabel()} <small>(${shortDuration(60)})</small>`,
-                unit: speedUnit,
-            }, {
-                id: 'hr-cur',
-                value: x => H.number(x.state && x.state.heartrate),
-                key: 'HR',
-                unit: 'bpm',
-            }, {
-                id: 'hr-avg',
-                value: x => H.number(x.stats && x.stats.hr.avg),
-                key: 'HR <small>(avg)</small>',
-                unit: 'bpm',
-            }, {
-                id: 'hr-smooth-60',
-                value: x => H.number(x.stats && x.stats.hr.smooth[60]),
-                key: `HR <small>(${shortDuration(60)})</small>`,
-                unit: 'bpm',
-            }, {
-                id: 'pwr-cur',
-                value: x => H.number(x.state && x.state.power),
-                key: `Power`,
-                unit: 'w',
-            }, {
-                id: 'pwr-smooth-5',
-                value: x => H.number(x.stats && x.stats.power.smooth[5]),
-                key: `Power <small>(${shortDuration(5)})</small>`,
-                unit: 'w',
-            }, {
-                id: 'pwr-smooth-15',
-                value: x => H.number(x.stats && x.stats.power.smooth[15]),
-                key: `Power <small>(${shortDuration(15)})</small>`,
-                unit: 'w',
-            }, {
-                id: 'pwr-smooth-60',
-                value: x => H.number(x.stats && x.stats.power.smooth[60]),
-                key: `Power <small>(${shortDuration(60)})</small>`,
-                unit: 'w',
-            }, {
-                id: 'pwr-smooth-300',
-                value: x => H.number(x.stats && x.stats.power.smooth[300]),
-                key: `Power <small>(${shortDuration(300)})</small>`,
-                unit: 'w',
-            }, {
-                id: 'pwr-smooth-1200',
-                value: x => H.number(x.stats && x.stats.power.smooth[1200]),
-                key: `Power <small>(${shortDuration(1200)})</small>`,
-                unit: 'w',
-            }, {
-                id: 'pwr-peak-5',
-                value: x => H.number(x.stats && x.stats.power.peaks[5].avg),
-                key: `Peak Power <small>(${shortDuration(5)})</small>`,
-                unit: 'w',
-            }, {
-                id: 'pwr-peak-15',
-                value: x => H.number(x.stats && x.stats.power.peaks[15].avg),
-                key: `Peak Power <small>(${shortDuration(15)})</small>`,
-                unit: 'w',
-            }, {
-                id: 'pwr-peak-60',
-                value: x => H.number(x.stats && x.stats.power.peaks[60].avg),
-                key: `Peak Power <small>(${shortDuration(60)})</small>`,
-                unit: 'w',
-            }, {
-                id: 'pwr-peak-300',
-                value: x => H.number(x.stats && x.stats.power.peaks[300].avg),
-                key: `Peak Power <small>(${shortDuration(300)})</small>`,
-                unit: 'w',
-            }, {
-                id: 'pwr-peak-1200',
-                value: x => H.number(x.stats && x.stats.power.peaks[1200].avg),
-                key: `Peak Power <small>(${shortDuration(1200)})</small>`,
-                unit: 'w',
-            }, {
-                id: 'pwr-avg',
-                value: x => H.number(x.stats && x.stats.power.avg),
-                key: 'Power <small>(avg)</small>',
-                unit: 'w',
-            }, {
-                id: 'pwr-cur-wkg',
-                value: x => fmtWkg(x.state && x.state.power, x.athlete),
-                key: `W/kg`,
-            }, {
-                id: 'pwr-smooth-5-wkg',
-                value: x => fmtWkg(x.stats && x.stats.power.smooth[5], x.athlete),
-                key: `W/kg <small>(${shortDuration(5)})</small>`,
-            }, {
-                id: 'pwr-smooth-15-wkg',
-                value: x => fmtWkg(x.stats && x.stats.power.smooth[15], x.athlete),
-                key: `W/kg <small>(${shortDuration(15)})</small>`,
-            }, {
-                id: 'pwr-smooth-60-wkg',
-                value: x => fmtWkg(x.stats && x.stats.power.smooth[60], x.athlete),
-                key: `W/kg <small>(${shortDuration(60)})</small>`,
-            }, {
-                id: 'pwr-smooth-300-wkg',
-                value: x => fmtWkg(x.stats && x.stats.power.smooth[300], x.athlete),
-                key: `W/kg <small>(${shortDuration(300)})</small>`,
-            }, {
-                id: 'pwr-smooth-1200-wkg',
-                value: x => fmtWkg(x.stats && x.stats.power.smooth[1200], x.athlete),
-                key: `W/kg <small>(${shortDuration(1200)})</small>`,
-            }, {
-                id: 'pwr-peak-5-wkg',
-                value: x => fmtWkg(x.stats && x.stats.power.peaks[5].avg, x.athlete),
-                key: `Peak W/kg <small>(${shortDuration(5)})</small>`,
-            }, {
-                id: 'pwr-peak-15-wkg',
-                value: x => fmtWkg(x.stats && x.stats.power.peaks[15].avg, x.athlete),
-                key: `Peak W/kg <small>(${shortDuration(15)})</small>`,
-            }, {
-                id: 'pwr-peak-60-wkg',
-                value: x => fmtWkg(x.stats && x.stats.power.peaks[60].avg, x.athlete),
-                key: `Peak W/kg <small>(${shortDuration(60)})</small>`,
-            }, {
-                id: 'pwr-peak-300-wkg',
-                value: x => fmtWkg(x.stats && x.stats.power.peaks[300].avg, x.athlete),
-                key: `Peak W/kg <small>(${shortDuration(300)})</small>`,
-            }, {
-                id: 'pwr-peak-1200-wkg',
-                value: x => fmtWkg(x.stats && x.stats.power.peaks[1200].avg, x.athlete),
-                key: `Peak W/kg <small>(${shortDuration(1200)})</small>`,
-            }, {
-                id: 'pwr-avg-wkg',
-                value: x => fmtWkg(x.stats && x.stats.power.avg, x.athlete),
-                key: 'W/kg <small>(avg)</small>',
-            }, {
-                id: 'pwr-np',
-                value: x => H.number(x.stats && x.stats.power.np),
-                key: 'NP',
-            }, {
-                id: 'pwr-if',
-                value: x => fmtPct((x.stats && x.stats.power.np || 0) / (x.athlete && x.athlete.ftp)),
-                key: 'IF',
-            }, {
-                id: 'pwr-vi',
-                value: x => H.number(x.stats && x.stats.power.np / x.stats.power.avg, {precision: 2, fixed: true}),
-                key: 'VI',
-            }, {
-                id: 'pwr-max',
-                value: x => H.number(x.stats && x.stats.power.max),
-                key: 'Power <small>(max)</small>',
-                unit: 'w',
-            }, {
-                id: 'ev-place',
-                value: x => x.eventPosition ? `${H.place(x.eventPosition, {html: true})}/<small>${x.eventParticipants}</small>`: '-',
-                key: 'Place',
-            }, {
-                id: 'ev-fin',
-                value: x => eventMetric ? eventMetric === 'distance' ? fmtDist(x.remaining) : fmtDur(x.remaining) : '-',
-                key: 'Finish',
-            }, {
-                id: 'ev-dst',
-                tooltip: () => 'far spray',
-                value: x => x.state ? (eventMetric === 'distance' ?
-                    `${fmtDist(x.state.eventDistance)}/${fmtDist(x.state.eventDistance + x.remaining)}` :
-                    fmtDist(x.state.eventDistance)) : '-',
-                key: () => eventMetric ? 'Dist <small>(event)</small>' : 'Dist <small>(session)</small>',
-            }, {
-                id: 'dst',
-                value: x => fmtDist(x.state && x.state.distance),
-                key: 'Dist',
-            }, {
-                id: 'ev-name',
-                value: x => x.eventSubgroup ? x.eventSubgroup.name : '-',
-                key: 'Event',
-            }, {
-                id: 'rt-name',
-                value: x => x.eventSubgroup ?
-                    ((x.eventSubgroup.laps && x.eventSubgroup.laps > 1) ? `${x.eventSubgroup.laps} x ` : '') +
-                    x.eventSubgroup.route.name : '-',
-                key: 'Route',
-            }, {
-                id: 'el-gain',
-                value: x => fmtElevation(x.state && x.state.climbing),
-                key: 'Climbed',
-            }, {
-                id: 'draft-cur',
-                value: x => fmtPct(x.state && x.state.draft / 100),
-                key: 'Draft',
-            }, {
-                // XXX after a release or two with the id system move this to the top
-                id: 'time-session',
-                value: x => fmtDur(x.state && x.state.time || 0),
-                key: 'Time',
-            }, {
-                // XXX after a release or two with the id system move this to the top
-                id: 'clock',
-                value: x => new Date().toLocaleTimeString(),
-                key: '',
-            }],
+            fields: fields.fields
         });
     }
     return renderer;
@@ -497,28 +196,36 @@ async function renderAvailableMods() {
     const mods = await common.rpc.getAvailableMods();
     const el = document.querySelector('#mods-container');
     if (!mods || !mods.length) {
-        el.innerHTML = '<i>No mods detected</i>';
+        el.innerHTML = `<b><i>No Mods detected</i></b>`;
         return;
     }
     const html = [];
-    const ids = {};
-    for (const {manifest, id, enabled} of mods) {
+    for (const {manifest, id, enabled, packed, restartRequired, status} of mods) {
         if (!manifest) {
             continue;
         }
         const safeId = common.sanitizeAttr(id);
-        ids[safeId] = id;
+        modSafeIds.set(safeId, id);
+        const optRemove = !restartRequired ?
+            packed ?
+                `<span class="button std xs danger" data-mod-action="remove">Remove</span>` :
+                `<small class="badge" style="--sat: 0"
+                        title="Mod is manually installed in the SauceMods folder">unpacked</small>` :
+            '';
+        const enBox = !restartRequired ?
+            `Enabled <input type="checkbox" ${enabled ? 'checked' : ''}/>` :
+            `<small class="badge" style="--sat: 0">${status}</small>`;
         html.push(`
-            <div class="mod" data-id="${safeId}">
-                <div class="title">
+            <div class="mod ${restartRequired ? 'restart-required' : ''}" data-id="${safeId}">
+                <div class="header">
                     <div>
                         <span class="name">${common.stripHTML(manifest.name)}</span>
                         <span class="version">(v${manifest.version})</span>
+                        ${optRemove}
                     </div>
-                    <label class="enabled">
-                        Enabled
-                        <input type="checkbox" ${enabled ? 'checked' : ''}/>
-                        <span class="restart-required">Restart Required</span>
+                    <label data-mod-action="enable-toggle" class="enabled ${restartRequired ? 'edited' : ''}">
+                        ${enBox}
+                        <span class="restart-required"></span>
                     </label>
                 </div>
                 <div class="info">${common.stripHTML(manifest.description)}</div>
@@ -531,50 +238,41 @@ async function renderAvailableMods() {
             if (manifest.website_url) {
                 const url = common.sanitizeAttr(common.stripHTML(manifest.website_url));
                 html.push(`<div class="website"><a href="${url}"
-                    target="_blank" external>Website <ms>open_in_new</ms></a>`);
+                    target="_blank" external>Website <ms>open_in_new</ms></a></div>`);
             }
             html.push('</div>');
         }
         html.push(`</div>`);
     }
     el.innerHTML = html.join('');
-    el.addEventListener('click', async ev => {
-        const label = ev.target.closest('label.enabled');
-        if (!label) {
-            return;
-        }
-        const enabled = label.querySelector('input').checked;
-        const id = ids[ev.target.closest('.mod[data-id]').dataset.id];
-        await common.rpc.setModEnabled(id, enabled);
-        label.querySelector('.restart-required').style.display = 'initial';
-    });
 }
 
 
-async function renderWindows() {
-    const windows = Object.values(await common.rpc.getWindows()).filter(x => !x.private);
-    const manifests = await common.rpc.getWindowManifests();
+async function renderWindows(wins) {
+    const windows = (await common.rpc.getWidgetWindowSpecs()).filter(x => !x.private);
+    const manifests = await common.rpc.getWidgetWindowManifests();
     const el = document.querySelector('#windows');
     const descs = Object.fromEntries(manifests.map(x => [x.type, x]));
     windows.sort((a, b) => !!a.closed - !!b.closed);
-    el.querySelector('table.active-windows tbody').innerHTML = windows.map(x => {
+    common.softInnerHTML(el.querySelector('table.active-windows tbody'), windows.map(x => {
         const desc = descs[x.type] || {
             prettyName: `Unknown window: ${x.type}`,
             prettyDesc: common.sanitizeAttr(JSON.stringify(x, null, 4)),
         };
         return `
             <tr data-id="${x.id}" class="window ${x.closed ? 'closed' : 'open'}"
-                title="${common.sanitizeAttr(desc.prettyDesc)}\n\nDouble click/tap to ${x.closed ? 'reopen' : 'focus'}">
-                <td class="name">${common.stripHTML(x.customName || desc.prettyName)}<a class="link win-edit-name"
-                    title="Edit name"><ms>edit</ms></a></td>
+                title="${common.sanitizeAttr(desc.prettyDesc)}\n\n` +
+                       `Double click/tap to ${x.closed ? 'reopen' : 'focus'}">
+                <td class="name">${common.stripHTML(x.customName || desc.prettyName)}` +
+                    `<a class="link win-edit-name" title="Edit name"><ms>edit</ms></a></td>
                 <td class="state">${x.closed ? 'Closed' : 'Open'}</td>
-                <td class="btn"><a title="Reopen this window" class="link win-restore"
-                    ><ms>add_box</ms></a></td>
-                <td class="btn" title="Delete this window and its settings"
-                    ><a class="link danger win-delete"><ms>delete_forever</ms></a></td>
+                <td class="btn"><a title="Reopen this window" class="link win-restore">` +
+                    `<ms>add_box</ms></a></td>
+                <td class="btn" title="Delete this window and its settings">` +
+                    `<a class="link danger win-delete"><ms>delete_forever</ms></a></td>
             </tr>
         `;
-    }).join('\n');
+    }).join('\n'));
     const mGroups = new Map();
     for (const m of manifests.filter(x => !x.private)) {
         if (!mGroups.has(m.groupTitle)) {
@@ -582,11 +280,12 @@ async function renderWindows() {
         }
         mGroups.get(m.groupTitle).push(m);
     }
-    el.querySelector('.add-new select').innerHTML = Array.from(mGroups.entries()).map(([title, ms]) =>
-        `<optgroup label="${common.sanitizeAttr(common.stripHTML(title || 'Main'))}">${ms.map(x =>
-            `<option title="${common.sanitizeAttr(common.stripHTML(x.prettyDesc))}"
-                     value="${x.type}">${common.stripHTML(x.prettyName)}</option>`)}</optgroup>`
-    ).join('');
+    common.softInnerHTML(
+        el.querySelector('.add-new select'),
+        Array.from(mGroups.entries()).map(([title, ms]) =>
+            `<optgroup label="${common.sanitizeAttr(common.stripHTML(title || 'Main'))}">${ms.map(x =>
+                `<option title="${common.sanitizeAttr(common.stripHTML(x.prettyDesc))}"
+                     value="${x.type}">${common.stripHTML(x.prettyName)}</option>`)}</optgroup>`).join(''));
 }
 
 
@@ -617,22 +316,22 @@ async function frank() {
         bubble.remove();
         aud.remove();
     }, 110 * 1000);
-    await sauce.sleep(12000);
+    await common.sleep(12000);
     words.textContent = 'Let us celebrate this joyous occasion with my favorite song!';
-    await sauce.sleep(19000);
+    await common.sleep(19000);
     words.textContent = 'Now we Disco!';
-    await sauce.sleep(2800);
+    await common.sleep(2800);
     let discos = 1;
     while (active) {
         words.textContent = '';
-        await sauce.sleep(60);
+        await common.sleep(60);
         if (discos++ > 10) {
             discos = 1;
         }
         for (let i = 0; i < discos; i++) {
             words.textContent += ' DISCO! ';
         }
-        await sauce.sleep(400);
+        await common.sleep(400);
     }
 }
 
@@ -652,22 +351,27 @@ async function initWindowsPanel() {
         }
         const id = ev.target.closest('[data-id]').dataset.id;
         if (link.classList.contains('win-restore')) {
-            await common.rpc.openWindow(id);
+            await common.rpc.openWidgetWindow(id);
         } else if (link.classList.contains('profile-select')) {
             await common.rpc.activateProfile(id);
             await renderProfiles();
             await renderWindows();
         } else if (link.classList.contains('win-delete')) {
-            await common.rpc.removeWindow(id);
+            if (confirm('Delete this window and its settings?')) {
+                await common.rpc.removeWidgetWindow(id);
+            }
         } else if (link.classList.contains('profile-delete')) {
-            await common.rpc.removeProfile(id).catch(e => alert(`Remove Error\n\n${e.message}`));
-            await renderProfiles();
+            if (confirm('Delete this profile and all its windows?')) {
+                await common.rpc.removeProfile(id).catch(e => alert(`Remove Error...\n\n${e.message}`));
+                await renderProfiles();
+            }
         } else if (link.classList.contains('profile-clone')) {
-            await common.rpc.cloneProfile(id).catch(e => alert(`Clone Error\n\n${e.message}`));
+            await common.rpc.cloneProfile(id).catch(e => alert(`Clone Error...\n\n${e.message}`));
             await renderProfiles();
         } else if (link.classList.contains('profile-export')) {
             const data = await common.rpc.exportProfile(id);
-            const f = new File([JSON.stringify(data)], `${data.profile.name}.json`, {type: 'application/json'});
+            const f = new File(
+                [JSON.stringify(data, null, 4)], `${data.profile.name}.json`, {type: 'application/json'});
             const l = document.createElement('a');
             l.download = f.name;
             l.style.display = 'none';
@@ -694,17 +398,17 @@ async function initWindowsPanel() {
                 }
                 actionTaken = true;
                 const customName = common.sanitize(input.value);
-                await common.rpc.updateWindow(id, {customName});
+                await common.rpc.updateWidgetWindowSpec(id, {customName});
                 await renderWindows();
                 if (customName.match(/frank/i)) {
                     frank();
                 }
             };
             input.addEventListener('blur', save);
-            input.addEventListener('keydown', ev => {
-                if (ev.code === 'Enter') {
+            input.addEventListener('keydown', keyEv => {
+                if (keyEv.code === 'Enter') {
                     save();
-                } if (ev.code === 'Escape') {
+                } if (keyEv.code === 'Escape') {
                     actionTaken = true;
                     renderWindows();
                 }
@@ -728,10 +432,10 @@ async function initWindowsPanel() {
                 await renderProfiles();
             };
             input.addEventListener('blur', save);
-            input.addEventListener('keydown', ev => {
-                if (ev.code === 'Enter') {
+            input.addEventListener('keydown', keyEv => {
+                if (keyEv.code === 'Enter') {
                     save();
-                } if (ev.code === 'Escape') {
+                } if (keyEv.code === 'Escape') {
                     actionTaken = true;
                     renderProfiles();
                 }
@@ -745,7 +449,7 @@ async function initWindowsPanel() {
         }
         const id = row.dataset.id;
         if (row.classList.contains('closed')) {
-            await common.rpc.openWindow(id);
+            await common.rpc.openWidgetWindow(id);
         } else {
             await common.rpc.highlightWindow(id);
         }
@@ -753,22 +457,22 @@ async function initWindowsPanel() {
     winsEl.querySelector('.add-new input[type="button"]').addEventListener('click', async ev => {
         ev.preventDefault();
         const type = ev.currentTarget.closest('.add-new').querySelector('select').value;
-        const id = await common.rpc.createWindow({type});
-        await common.rpc.openWindow(id);
+        const {id} = await common.rpc.createWidgetWindow({type});
+        await common.rpc.openWidgetWindow(id);
     });
     winsEl.addEventListener('click', async ev => {
-        const btn = ev.target.closest('.button[data-action]');
+        const btn = ev.target.closest('.button[data-win-action]');
         if (!btn) {
             return;
         }
-        if (btn.dataset.action === 'profile-create') {
+        if (btn.dataset.winAction === 'profile-create') {
             await common.rpc.createProfile();
             await renderProfiles();
-        } else if (btn.dataset.action === 'profile-import') {
+        } else if (btn.dataset.winAction === 'profile-import') {
             const fileEl = document.createElement('input');
             fileEl.type = 'file';
             fileEl.accept='.json';
-            fileEl.addEventListener('change', async ev => {
+            fileEl.addEventListener('change', async () => {
                 fileEl.remove();
                 const f = fileEl.files[0];
                 if (!f) {
@@ -788,11 +492,41 @@ async function initWindowsPanel() {
             fileEl.click();
         }
     });
+    document.querySelector('#mods-container').addEventListener('click', async ev => {
+        const actionEl = ev.target.closest('[data-mod-action]');
+        if (actionEl.dataset.modAction === 'enable-toggle') {
+            const label = ev.target.closest('label.enabled');
+            const enabled = label.querySelector('input').checked;
+            const id = modSafeIds.get(ev.target.closest('.mod[data-id]').dataset.id);
+            label.classList.add('edited');
+            await common.rpc.setModEnabled(id, enabled);
+        } else if (actionEl.dataset.modAction === 'remove') {
+            const id = modSafeIds.get(ev.target.closest('.mod[data-id]').dataset.id);
+            await common.rpc.removePackedMod(id);
+        }
+    });
+    document.querySelector('.mods-path.button').addEventListener('click', common.rpc.showModsRootFolder);
 }
 
 
 export async function settingsMain() {
+    fetch('https://www.sauce.llc/supporters-v2.json').then(async r => {
+        if (!r.ok) {
+            throw new Error("fetch error: " + r.status);
+        }
+        const supporters = await r.json();
+        const sample = supporters[supporters.length * Math.random() | 0];
+        const el =  document.querySelector('.about a.sauce-star');
+        el.textContent = sample.name;
+        if (sample.url) {
+            el.href = sample.url;
+        }
+    }).catch(e => console.error(e));
+    const athleteRefreshPromise = common.rpc.getAthlete('self', {refresh: true});
     common.initInteractionListeners();
+    const appSettingsUpdaters = Array.from(document.querySelectorAll('form.app-settings'))
+        .map(common.initAppSettingsForm);
+    const appSettingsUpdate = (...args) => Promise.all(appSettingsUpdaters.map(x => x(...args)));
     const extraData = {version: await common.rpc.getVersion()};
     document.addEventListener('click', async ev => {
         const btn = ev.target.closest('.button[data-action]');
@@ -814,18 +548,25 @@ export async function settingsMain() {
             await appSettingsUpdate(extraData);
         }
     });
+    common.subscribe('save-widget-window-specs', renderWindows, {source: 'windows'});
     common.subscribe('set-windows', renderWindows, {source: 'windows'});
+    common.subscribe('available-mods-changed', renderAvailableMods, {source: 'mods'});
     extraData.webServerURL = await common.rpc.getWebServerURL();
-    const athlete = await common.rpc.getAthlete('self', {refresh: true, noWait: true});
+    const athlete = await common.rpc.getAthlete('self');
     extraData.profileDesc = athlete && athlete.sanitizedFullname;
     if (athlete) {
         document.querySelector('img.avatar').src = athlete.avatar || 'images/blankavatar.png';
     }
-    const appSettingsUpdate = common.initAppSettingsForm('form.app-settings');
     document.addEventListener('app-setting-set', ev => {
         if (ev.data.key === 'autoLapMetric') {
             extraData.autoLapIntervalUnits = ev.data.value === 'time' ? 'mins' : 'km';
             appSettingsUpdate(extraData);
+        } else if (ev.data.key === 'emulateFullscreenZwift') {
+            if (ev.data.value) {
+                common.rpc.activateFullscreenZwiftEmulation();
+            } else {
+                common.rpc.deactivateFullscreenZwiftEmulation();
+            }
         }
     });
     extraData.autoLapIntervalUnits = await common.rpc.getSetting('autoLapMetric') === 'time' ?
@@ -838,10 +579,46 @@ export async function settingsMain() {
             await appSettingsUpdate(extraData);
         }, {source: 'gameConnection'});
     }
+    if (window.isElectron) {
+        extraData.gpuEnabled = await common.rpc.getLoaderSetting('gpuEnabled');
+    }
+    const forms = document.querySelectorAll('form');
+    forms.forEach(x => x.addEventListener('input', async ev => {
+        const el = ev.target.closest('[data-store="loader"]');
+        if (!el) {
+            return;
+        }
+        ev.stopPropagation();
+        el.closest('label').classList.add('edited');
+        if (el.type === 'checkbox') {
+            await common.rpc.setLoaderSetting(el.name, el.checked);
+        } else {
+            throw new TypeError("Unsupported");
+        }
+    }, {capture: true}));
     const loginInfo = await common.rpc.getZwiftLoginInfo();
     extraData.mainZwiftLogin = loginInfo && loginInfo.main && loginInfo.main.username;
     extraData.monitorZwiftLogin = loginInfo && loginInfo.monitor && loginInfo.monitor.username;
     await appSettingsUpdate(extraData);
     await common.initSettingsForm('form.settings')();
     await initWindowsPanel();
+    athleteRefreshPromise.then(x => {
+        if (!x) {
+            return;
+        }
+        if (x.avatar && (!athlete || athlete.avatar !== x.avatar)) {
+            document.querySelector('img.avatar').src = x.avatar;
+        }
+        if (extraData.profileDesc !== x.sanitizedFullname) {
+            extraData.profileDesc = x.sanitizedFullname;
+            appSettingsUpdate(extraData);
+        }
+    });
+}
+
+const q = new URL(import.meta.url).searchParams;
+if (q.has('main')) {
+    main();
+} else if (q.has('settings')) {
+    settingsMain();
 }

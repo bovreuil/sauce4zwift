@@ -8,6 +8,8 @@
 
         <title>Chat - Settings - Sauce for Zwift™</title>
 
+        <script src="./src/preloads.js"></script>
+
         <link id="favicon" rel="shortcut icon" href="images/favicon.png"/>
         <link rel="stylesheet" href="css/common.css"/>
 
@@ -38,20 +40,17 @@
                     <input type="checkbox" name="reverseOrder"/>
                 </label>
                 <label>
+                    <key>Right align:</key>
+                    <input type="checkbox" name="rightAlign"/>
+                </label>
+                <label>
                     <key>Theme override:</key>
-                    <select name="themeOverride">
-                        <option value="">Use app setting</option>
-                        <option value="sauce">Sauce</option>
-                        <option value="bluepink">Ice Blue Pink</option>
-                        <option value="green">Green Lantern</option>
-                        <option value="burgundy">Ron Burgundy</option>
-                        <option value="aqua">Aqua Salad</option>
-                        <option value="watermelon">Watermelon</option>
-                        <option value="light">Light</option>
-                        <option value="dark">Dark</option>
-                        <option value="transparent-light">Transparent - Light</option>
-                        <option value="transparent-dark">Transparent - Dark</option>
-                    </select>
+                    <select is="sauce-theme" override></select>
+                </label>
+                <label>
+                    <key>Transparency:</key>
+                    <input type="range" name="messageTransparency" min="0" max="100" value="30" step="1"/>
+                    <input type="number" name="messageTransparency" value="30" style="--size: 5"/>%
                 </label>
                 <label title="Mostly useful for streamers using OBS window and browser sources">
                     <key>Solid background:</key>
@@ -61,6 +60,8 @@
                     <key>Background color:</key>
                     <input type="color" name="backgroundColor" data-depends-on="solidBackground"/>
                     <input type="text" name="backgroundColor" data-depends-on="solidBackground" size="7"/>
+                    <input type="number" title="Opacity" name="backgroundAlpha" data-depends-on="solidBackground"
+                           style="--size: 5" min="0" max="100" value="100"/>%
                 </label>
             </form>
         </div>

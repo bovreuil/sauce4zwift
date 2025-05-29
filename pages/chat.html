@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html class="" tabindex="0" data-settings-key="chat-settings-v2">
+<html class="passive-overlay-scrollbars" tabindex="0" data-settings-key="chat-settings-v2">
     <head>
         <meta charset="utf-8"/>
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -8,15 +8,17 @@
 
         <title>Chat - Sauce for Zwift™</title>
 
-        <script type="module">
-            import {main} from './src/chat.mjs';
-            main();
-        </script>
+        <script src="./src/preloads.js"></script>
 
         <link rel="manifest" href="chat-manifest.json"/>
         <link id="favicon" rel="shortcut icon" href="images/favicon.png"/>
         <link rel="stylesheet" href="css/common.css"/>
         <link rel="stylesheet" href="css/chat.css"/>
+
+        <script type="module">
+            import {main} from './src/chat.mjs';
+            main();
+        </script>
     </head>
     <body class="transparent-bg">
         <div id="titlebar">
@@ -25,7 +27,7 @@
                 <div class="title">Chat</div>
                 <div class="filler"></div>
                 <div class="buttons">
-                    <a class="button open-settings" href="chat-settings.html?width=400&height=400&child-window"
+                    <a class="button open-settings" href="chat-settings.html?width=420&height=400&child-window"
                        title="Open settings window" target="chat-settings"><ms>settings</ms></a>
                     <div title="Minimize" class="button minimize electron-only"><ms>minimize</ms></div>
                     <div title="Close this window" class="button close electron-only"><ms>close</ms></div>

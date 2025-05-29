@@ -1,7 +1,8 @@
 import path from 'node:path';
+import process from 'node:process';
 import os from 'node:os';
-import {fileURLToPath} from 'node:url';
-import * as storage from './storage.mjs';
+import urlMod from 'node:url';
+import * as storageMod from './storage.mjs';
 import * as patreon from './patreon.mjs';
 import * as rpc from './rpc.mjs';
 import * as mods from './mods.mjs';
@@ -9,18 +10,19 @@ import {EventEmitter} from 'node:events';
 import {sleep} from '../shared/sauce/base.mjs';
 import {createRequire} from 'node:module';
 import * as menu from './menu.mjs';
-import * as app from './main.mjs';
+import * as main from './main.mjs';
+import * as mime from './mime.mjs';
 
 const require = createRequire(import.meta.url);
 const electron = require('electron');
 
-const isWindows = os.platform() === 'win32';
-const isMac = !isWindows && os.platform() === 'darwin';
-const isLinux = !isWindows && !isMac && os.platform() === 'linux';
-const modContentScripts = [];
-const modContentStyle = [];
+const platform = os.platform();
+const isWindows = platform === 'win32';
+const isMac = !isWindows && platform === 'darwin';
+const isLinux = !isWindows && !isMac && platform === 'linux';
 const sessions = new Map();
 const magicLegacySessionId = '___LEGACY-SESSION___';
+const profilesKey = 'window-profiles';
 
 let profiles;
 let activeProfile;
@@ -28,7 +30,7 @@ let activeProfileSession;
 let swappingProfiles;
 
 electron.app.on('window-all-closed', () => {
-    if (app.started && !app.quiting && !swappingProfiles) {
+    if (main.started && !main.quiting && !swappingProfiles) {
         electron.app.quit();
     }
 });
@@ -50,23 +52,44 @@ class SauceBrowserWindow extends electron.BrowserWindow {
         return (this.subWindow ? '[sub-window] ' : '') +
             (this.spec ? `specId:${this.spec.id}` : `id:${this.id}`);
     }
+
+    loadFile(pathname, options) {
+        // Same as stock loadFile except we don't inject electron.app.getAppPath().
+        // On windows this will add a drive letter root to all paths. This is
+        // machine dependent, unnecessary and increases the complexity of our
+        // electron.protocol.handle(...) interceptor.
+        return this.loadURL(urlMod.format({
+            protocol: 'file',
+            slashes: true,
+            pathname,
+            ...options,
+        }));
+    }
 }
 
 
-export const windowManifests = [{
+export const widgetWindowManifests = [{
     type: 'overview',
     file: '/pages/overview.html',
     prettyName: 'Overview',
     prettyDesc: 'Main top window for overall control and stats',
     private: true,
-    options: {width: 0.6, height: 40, x: 0.2, y: 28},
+    options: {width: 0.6, height: 40, x: 0.2, y: 28, minHeight: 10, minWidth: 100},
     webPreferences: {backgroundThrottling: false}, // XXX Doesn't appear to work
     alwaysVisible: true,
 }, {
+    type: 'profile',
+    file: '/pages/profile.html',
+    prettyName: 'Profile',
+    prettyDesc: 'Athlete profile',
+    options: {width: 780, height: 340},
+    overlay: false,
+    private: true,
+}, {
     type: 'watching',
     file: '/pages/watching.html',
-    prettyName: 'Currently Watching',
-    prettyDesc: 'Replacement window for stats of the athlete being watched',
+    prettyName: 'Grid (Currently Watching)',
+    prettyDesc: 'Grid window for stats of the athlete being watched',
     options: {width: 0.18, aspectRatio: 1},
 }, {
     type: 'groups',
@@ -75,18 +98,18 @@ export const windowManifests = [{
     prettyDesc: 'A zoomable view of groups of athletes',
     options: {width: 0.15, height: 0.65},
 }, {
+    type: 'geo',
+    file: '/pages/geo.html',
+    prettyName: 'Map',
+    prettyDesc: 'Map and elevation profile',
+    options: {width: 0.18, aspectRatio: 1},
+}, {
     type: 'chat',
     file: '/pages/chat.html',
     prettyName: 'Chat',
     prettyDesc: 'Chat dialog from nearby athletes',
     options: {width: 0.18, aspectRatio: 2},
-},/* {
-    type: 'segments',
-    file: '/pages/segments.html',
-    prettyName: 'Segments',
-    prettyDesc: 'View current and nearby segment information',
-    options: {width: 300, aspectRatio: 3},
-}, */{
+}, {
     type: 'nearby',
     file: '/pages/nearby.html',
     prettyName: 'Nearby Athletes',
@@ -94,25 +117,45 @@ export const windowManifests = [{
     options: {width: 900, height: 0.8},
     overlay: false,
 }, {
-    type: 'events',
-    file: '/pages/events.html',
-    prettyName: 'Events',
-    prettyDesc: 'Event listings and entrant information',
-    options: {width: 900, height: 0.8},
-    overlay: false,
-}, {
     type: 'analysis',
     file: '/pages/analysis.html',
     prettyName: 'Analysis',
     prettyDesc: 'Analyze your session laps, segments and other stats',
-    options: {width: 900, height: 600},
+    options: {width: 1080, height: 0.8},
+    overlay: false,
+}, {
+    type: 'athletes',
+    file: '/pages/athletes.html',
+    prettyName: 'Athletes',
+    prettyDesc: 'View, find and manage athletes',
+    options: {width: 960, height: 0.7},
+    overlay: false,
+}, {
+    type: 'events',
+    file: '/pages/events.html',
+    prettyName: 'Events',
+    prettyDesc: 'Event listings and entrant information',
+    options: {width: 1000, height: 0.7},
     overlay: false,
 }, {
     type: 'game-control',
     file: '/pages/game-control.html',
     prettyName: 'Game Control',
     prettyDesc: 'Control game actions like view, shouting, HUD toggle, etc',
-    options: {width: 300, aspectRatio: 1.65},
+    options: {width: 300, aspectRatio: 1.52},
+}, {
+    type: 'segments',
+    file: '/pages/segments.html',
+    prettyName: 'Segments [prototype]',
+    prettyDesc: 'View recent segments results',
+    options: {width: 300, aspectRatio: 1.8},
+}, {
+    type: 'browser-source',
+    file: '/pages/browser-source.html',
+    prettyName: 'Browser Source',
+    prettyDesc: 'Open a browser window to any custom site',
+    webPreferences: {webviewTag: true},
+    emulateNormalUserAgent: true,
 }, {
     type: 'power-gauge',
     groupTitle: 'Gauges',
@@ -161,7 +204,7 @@ export const windowManifests = [{
     file: '/pages/stats-for-nerds.html',
     prettyName: 'Stats for Nerds',
     prettyDesc: 'Debug info (cpu/mem) about Sauce',
-    options: {width: 900, height: 600},
+    options: {width: 1000, height: 600},
     overlay: false,
 }, {
     type: 'logs',
@@ -172,10 +215,17 @@ export const windowManifests = [{
     options: {width: 900, height: 600},
     overlay: false,
 }];
-rpc.register(() => windowManifests, {name: 'getWindowManifests'});
-const windowManifestsByType = new Map(windowManifests.map(x => [x.type, x]));
+const widgetWindowManifestsByType = new Map(widgetWindowManifests.map(x => [x.type, x]));
 
-const defaultWindows = [{
+
+function getWidgetWindowManifests() {
+    return widgetWindowManifests;
+}
+rpc.register(getWidgetWindowManifests);
+rpc.register(getWidgetWindowManifests, {name: 'getWindowManifests', deprecatedBy: getWidgetWindowManifests});
+
+
+const defaultWidgetWindows = [{
     id: 'default-overview-1',
     type: 'overview',
 }, {
@@ -190,11 +240,27 @@ const defaultWindows = [{
     id: 'default-chat-1',
     type: 'chat',
     options: {x: 320, y: 230},
+}, {
+    id: 'default-geo-1',
+    type: 'geo',
+    options: {x: -8, y: 40},
 }];
 
 // NEVER use app.getAppPath() it uses asar for universal builds
-const appPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const appPath = path.join(path.dirname(urlMod.fileURLToPath(import.meta.url)), '..');
 export const eventEmitter = new EventEmitter();
+
+
+function isInternalScheme(url) {
+    try {
+        return ['file:'].includes(new URL(url).protocol);
+    } catch(e) {
+        // XXX Root cause this...
+        console.warn('Invalid URL:', url); // XXX saw this one time during debug session, very rare though
+        debugger;
+        return false;
+    }
+}
 
 
 export function loadSession(name, options={}) {
@@ -204,77 +270,162 @@ export function loadSession(name, options={}) {
     const persist = options.persist !== false;
     const partition = name !== magicLegacySessionId ? (persist ? 'persist:' : '') + name : '';
     const s = electron.session.fromPartition(partition);
-    s.protocol.interceptFileProtocol('file', onInterceptFileProtocol);
+    if (s.protocol.isProtocolHandled('file')) {
+        console.warn("Replacing builtin file:// handler for:", name, s);
+        s.protocol.unhandle('file');
+    }
+    s.protocol.handle('file', onHandleFileProtocol.bind(s));
     sessions.set(name, s);
     return s;
 }
 
 
-function onInterceptFileProtocol(request, callback) {
-    let file = fileURLToPath(request.url);
-    const fInfo = path.parse(file);
-    file = file.substr(fInfo.root.length);
-    let rootPath = appPath;
-    if (file.startsWith('mods' + path.sep)) {
-        for (const x of mods.available) {
-            const prefix = path.normalize(`mods/${x.id}/`);
-            if (file.startsWith(prefix)) {
-                rootPath = x.modPath;
-                file = file.substr(prefix.length);
-                break;
+function emulateNormalUserAgent(win) {
+    const ua = win.webContents.session.getUserAgent()
+        .replace(/ SauceforZwift.*? /, ' ')
+        .replace(/ Electron\/.*? /, ' ');
+    win.webContents.setUserAgent(ua);
+    const wr = win.webContents.session.webRequest;
+    if (!wr._emNormUserAgentWebContents) {
+        wr._emNormUserAgentWebContents = new WeakSet();
+        wr.onBeforeSendHeaders((x, cb) => {
+            if (wr._emNormUserAgentWebContents.has(x.webContents)) {
+                x.requestHeaders['User-Agent'] = ua;
             }
-        }
+            cb(x);
+        });
     }
-    // This allows files to be loaded like watching.___id-here___.html which ensures
-    // some settings like zoom factor are unique to each window.
-    let m;
-    if (fInfo.ext === '.html' && (m = fInfo.name.match(/.\.___.+___$/))) {
-        const p = path.parse(file);
-        p.name = p.name.substr(0, m.index + 1);
-        p.base = undefined;
-        file = path.format(p);
-    }
-    callback(path.join(rootPath, file));
+    wr._emNormUserAgentWebContents.add(win.webContents);
+    win.webContents.on('did-create-window', subWin => {
+        subWin.webContents.setUserAgent(ua);
+        wr._emNormUserAgentWebContents.add(subWin.webContents);
+    });
+    win.webContents.on('did-attach-webview', (ev, webContents) => {
+        webContents.setUserAgent(ua);
+        wr._emNormUserAgentWebContents.add(webContents);
+    });
 }
 
-electron.protocol.interceptFileProtocol('file', onInterceptFileProtocol);
 
-electron.ipcMain.on('getWindowContextSync', ev => {
-    const returnValue = {
-        id: null,
-        type: null,
+function onHandleFileProtocol(request) {
+    // NOTE: Always use path.posix here...
+    const url = urlMod.parse(request.url);
+    let pathname = url.pathname;
+    let rootPath = appPath;
+    if (pathname === '/sauce:dummy') {
+        return new Response('');
+    }
+    // This allows files to be loaded like watching.___id-here___.html which ensures
+    // some settings like zoom factor are unique to each window (they don't conform to origin
+    // based sandboxing).
+    const pInfo = path.posix.parse(pathname);
+    const idMatch = pInfo.name.match(/\.___.+___$/);
+    if (idMatch) {
+        pInfo.name = pInfo.name.substr(0, idMatch.index);
+        pInfo.base = undefined;
+        pathname = path.posix.format(pInfo);
+    }
+    const modMatch = pathname.match(/\/mods\/(.+?)\//);
+    if (modMatch) {
+        const modId = modMatch[1]; // e.g. "foo-mod-123"
+        const mod = mods.getMod(modId);
+        if (!mod) {
+            console.error("Invalid Mod ID:", modId);
+            return new Response(null, {status: 404});
+        }
+        const root = modMatch[0]; // e.g. "/mods/foo-mod-123/"
+        pathname = pathname.substr(root.length);
+        if (!mod.packed) {
+            rootPath = mod.modPath;
+        } else {
+            return mod.zip.entryData(path.posix.join(mod.zipRootDir, pathname)).then(data => {
+                const headers = {};
+                const mimeType = mime.mimeTypesByExt.get(pInfo.ext.substr(1));
+                if (mimeType) {
+                    headers['content-type'] = mimeType;
+                } else {
+                    console.warn("Could not determine mime type for:", pathname);
+                }
+                return new Response(data, {status: data.byteLength ? 200 : 204, headers});
+            }).catch(e => {
+                if (e.message.match(/(not found|not file)/)) {
+                    return new Response(null, {status: 404});
+                } else {
+                    throw e;
+                }
+            });
+        }
+    }
+    const elFetch = this ? this.fetch.bind(this) : electron.net.fetch;
+    return elFetch(`file://${path.posix.join(rootPath, pathname)}`, {bypassCustomProtocolHandlers: true});
+}
+electron.protocol.handle('file', onHandleFileProtocol);
+
+
+electron.ipcMain.on('getWindowMetaSync', ev => {
+    const internalScheme = isInternalScheme(ev.sender.getURL());
+    const meta = {
+        context: {
+            id: null,
+            type: null,
+            platform,
+        },
     };
     try {
         const win = ev.sender.getOwnerBrowserWindow();
-        returnValue.frame = win.frame;
-        if (win.spec) {
-            Object.assign(returnValue, {
+        meta.context.frame = win.frame;
+        if (internalScheme && win.spec) {
+            meta.internal = true;
+            meta.modContentScripts = mods.contentScripts;
+            meta.modContentStylesheets = mods.contentCSS;
+            Object.assign(meta.context, {
                 id: win.spec.id,
                 type: win.spec.type,
                 spec: win.spec,
-                manifest: windowManifestsByType.get(win.spec.type),
+                manifest: widgetWindowManifestsByType.get(win.spec.type),
             });
+        } else {
+            meta.internal = false;
         }
     } finally {
-        ev.returnValue = returnValue; // MUST set otherwise page blocks.
+        // CAUTION: ev.returnValue is highly magical.  It MUST be set to avoid hanging
+        // the page load and it can only be set once the value is frozen because it will
+        // copy/serialize the contents when assigned.
+        ev.returnValue = meta;
     }
 });
 
+
+function canToggleVisibility(win) {
+    const manifest = widgetWindowManifestsByType.get(win.spec && win.spec.type);
+    if (!manifest) {
+        return false;
+    }
+    return manifest.alwaysVisible == null ? win.spec.overlay !== false : !manifest.alwaysVisible;
+}
+
+
 rpc.register(() => {
     for (const win of SauceBrowserWindow.getAllWindows()) {
-        const manifest = windowManifestsByType.get(win.spec && win.spec.type);
-        if (manifest && !manifest.alwaysVisible && win.spec.overlay !== false) {
-            win.hide();
+        if (canToggleVisibility(win)) {
+            if (!win.isMinimized()) {  // Workaround for electron/electron#41063
+                win.hide();
+            }
         }
+    }
+    if (isMac && main.sauceApp.getSetting('emulateFullscreenZwift')) {
+        deactivateFullscreenZwiftEmulation();
     }
 }, {name: 'hideAllWindows'});
 
 rpc.register(() => {
     for (const win of SauceBrowserWindow.getAllWindows()) {
-        const manifest = windowManifestsByType.get(win.spec && win.spec.type);
-        if (manifest && !manifest.alwaysVisible && win.spec.overlay !== false) {
+        if (canToggleVisibility(win)) {
             win.showInactive();
         }
+    }
+    if (isMac && main.sauceApp.getSetting('emulateFullscreenZwift')) {
+        activateFullscreenZwiftEmulation();
     }
 }, {name: 'showAllWindows'});
 
@@ -340,7 +491,155 @@ rpc.register(pid => {
 }, {name: 'getWindowInfoForPID'});
 
 
-export function getActiveWindow(id) {
+function lerp(v0, v1, t) {
+    return (1 - t) * v0 + t * v1;
+}
+
+
+async function macSetZoomAnimated(mwc, {scale, center, displayId, duration=300, fps=60}) {
+    const start = performance.now();
+    const origin = mwc.getZoom({point: center, displayId});
+    let t = 1 / fps * 1000 / duration;
+    center = center || origin.center;
+    do {
+        const s = lerp(origin.scale, scale, t);
+        const x = lerp(origin.center[0], center[0], t);
+        const y = lerp(origin.center[1], center[1], t);
+        mwc.setZoom({scale: s, center: [x, y], displayId});
+        await sleep(1000 / fps - 2);
+        t = (performance.now() - start) / duration;
+    } while (t < 1);
+    mwc.setZoom({scale, center, displayId});
+}
+
+
+function displayOverlap(a, b) {
+    const hOverlap = Math.max(0, Math.min(a.position[0] + a.size[0], b.position[0] + b.size[0]) -
+                                 Math.max(a.position[0], b.position[0]));
+    const vOverlap = Math.max(0, Math.min(a.position[1] + a.size[1], b.position[1] + b.size[1]) -
+                                 Math.max(a.position[1], b.position[1]));
+    return hOverlap * vOverlap;
+}
+
+
+let _fszEmulationAbort;
+let _fszEmulationTask;
+let _fszUsedOnce;
+export async function activateFullscreenZwiftEmulation() {
+    if (_fszEmulationAbort) {
+        _fszEmulationAbort.abort();
+        await _fszEmulationTask;
+    }
+    console.info("Fullscreen zwift emulation activated.");
+    const abortCtrl = _fszEmulationAbort = new AbortController();
+    const aborted = new Promise((_, reject) => {
+        abortCtrl.signal.addEventListener('abort', () => {
+            if (abortCtrl === _fszEmulationAbort) {
+                _fszEmulationAbort = null;
+            }
+            reject(abortCtrl.signal.reason);
+        }, {once: true});
+    });
+    aborted.catch(e => void 0);  // silence unhandled warn
+    const mwc = await import('macos-window-control');
+    const {fork} = await import('node:child_process');
+    if (!_fszUsedOnce) {
+        _fszUsedOnce = true;
+        fork('./src/unzoom.mjs', [process.pid], {detached: true}).unref();
+    }
+    _fszEmulationTask = (async () => {
+        let curPid, curDisplaySig;
+        for (let i = 0; !abortCtrl.signal.aborted; i++) {
+            if (i) {
+                await Promise.race([sleep(Math.min(5000, 500 * (1.05 ** i))), aborted]);
+            }
+            if (!mwc.hasAccessibilityPermission({prompt: true})) {
+                console.warn("Accessibility permissions required for fullscreen emulation: waiting...");
+                while (!mwc.hasAccessibilityPermission()) {
+                    await Promise.race([sleep(200), aborted]);
+                }
+                console.info("Accessibility permissions granted");
+            }
+            const zwiftApp = (await mwc.getApps()).find(x => x.name.match(/^ZwiftApp(Silicon)?$/));
+            //const zwiftApp = (await mwc.getApps()).find(x => x.name.match(/^Maps?$/));  // TESTING
+            if (!zwiftApp) {
+                if (curPid === undefined) {
+                    console.debug("Zwift not running...");
+                    curPid = null;
+                } else if (curPid != null) {
+                    i = 1;
+                    curPid = null;
+                    await Promise.all(mwc.getDisplays().map(x =>
+                        macSetZoomAnimated(mwc, {scale: 1, displayId: x.id})));
+                }
+                continue;
+            }
+            const displays = mwc.getDisplays();
+            const dSig = JSON.stringify(displays);
+            if (curPid !== zwiftApp.pid || curDisplaySig !== dSig) {
+                let win;
+                try {
+                    const wins = await mwc.getWindows({app: {pid: zwiftApp.pid}});
+                    if (!wins.length) {
+                        continue;  // common on startup
+                    }
+                    win = wins[0];
+                    if (!win.titlebarHeightEstimate) {
+                        // window loading still, retry...
+                        continue;
+                    }
+                } catch(e) {
+                    if (e instanceof mwc.NotFoundError) {
+                        continue;  // unlikely race, but possible
+                    } else {
+                        throw e;
+                    }
+                }
+                curPid = zwiftApp.pid;
+                curDisplaySig = dSig;
+                i = 1;
+                displays.sort((a, b) => displayOverlap(b, win) - displayOverlap(a, win));
+                const sSize = displays[0].size;
+                const menuHeight = sSize[1] - displays[0].visibleSize[1];
+                const scale = sSize[1] / (sSize[1] - menuHeight - win.titlebarHeightEstimate);
+                const size = [sSize[0] / scale, sSize[1] - menuHeight];
+                const position = displays[0].visiblePosition;
+                mwc.setWindowSize({app: {pid: zwiftApp.pid}, size, position});
+                const center = [position[0], position[1] + displays[0].visibleSize[1] - 1];
+                await macSetZoomAnimated(mwc, {scale, center, displayId: displays[0].id});
+            }
+        }
+    })().catch(e => {
+        if (e.name !== 'AbortError') {
+            console.error("Unexpected error in emulate fullscreen zwift loop: Disabling feature...");
+            main.sauceApp.setSetting('emulateFullscreenZwift', false);
+            for (const x of mwc.getDisplays()) {
+                mwc.setZoom({scale: 1, displayId: x.id});
+            }
+            throw e;
+        }
+    });
+}
+
+
+export async function deactivateFullscreenZwiftEmulation() {
+    if (_fszEmulationAbort) {
+        _fszEmulationAbort.abort();
+        await _fszEmulationTask;
+    }
+    const mwc = await import('macos-window-control');
+    await Promise.all(mwc.getDisplays().map(x =>
+        macSetZoomAnimated(mwc, {scale: 1, displayId: x.id})));
+}
+
+
+if (isMac) {
+    rpc.register(activateFullscreenZwiftEmulation);
+    rpc.register(deactivateFullscreenZwiftEmulation);
+}
+
+
+export function getWidgetWindow(id) {
     return SauceBrowserWindow.getAllWindows().find(x =>
         !x.subWindow && (x.spec && x.spec.id === id));
 }
@@ -350,9 +649,9 @@ function initProfiles() {
     if (profiles) {
         throw new Error("Already activated");
     }
-    profiles = storage.get('window-profiles');
+    profiles = storageMod.get(profilesKey);
     if (!profiles || !profiles.length) {
-        const legacy = storage.get('windows');
+        const legacy = storageMod.get('windows');
         if (legacy) {
             console.warn("Upgrading legacy window mgmt system to profiles system...");
             profiles = [{
@@ -361,19 +660,25 @@ function initProfiles() {
                 active: true,
                 windows: legacy,
             }];
-            storage.remove('windows');
+            storageMod.remove('windows');
         } else {
             const profile = _createProfile('Default', 'default');
             profile.active = true;
             profiles = [profile];
         }
-        storage.set('window-profiles', profiles);
+        storageMod.set(profilesKey, profiles);
     }
     activeProfile = profiles.find(x => x.active);
     if (!activeProfile) {
         console.warn('No default profile found: Using first entry...');
         activeProfile = profiles[0];
         activeProfile.active = true;
+    }
+    if (!activeProfile.windowStack) {
+        activeProfile.windowStack = [];
+    }
+    if (!activeProfile.subWindowSettings) {
+        activeProfile.subWindowSettings = {};
     }
     activeProfileSession = loadSession(activeProfile.id);
 }
@@ -391,7 +696,7 @@ rpc.register(getProfiles);
 export function createProfile(name='New Profile', ident='custom') {
     const profile = _createProfile(name, ident);
     profiles.push(profile);
-    storage.set('window-profiles', profiles);
+    storageMod.set(profilesKey, profiles);
     return profile;
 }
 rpc.register(createProfile);
@@ -399,20 +704,26 @@ rpc.register(createProfile);
 
 function _createProfile(name, ident) {
     const windows = {};
-    for (const x of defaultWindows) {
-        const [id, data] = initWindow(x);
-        windows[id] = data;
+    for (const x of defaultWidgetWindows) {
+        const spec = initWidgetWindowSpec(x);
+        windows[spec.id] = spec;
     }
     return {
         id: `${ident}-${Date.now()}-${Math.random() * 10000000 | 0}`,
         name,
         active: false,
         windows,
+        subWindowSettings: {},
+        windowStack: [],
     };
 }
 
 
 export function activateProfile(id) {
+    if (!profiles.find(x => x.id === id)) {
+        console.error("Invalid profile ID:", id);
+        return null;
+    }
     if (activeProfile && activeProfile.id === id) {
         console.warn("Profile already active");
         return activeProfile;
@@ -430,11 +741,15 @@ export function activateProfile(id) {
             x.active = x.id === id;
         }
         activeProfile = profiles.find(x => x.active);
+        if (!activeProfile.windowStack) {
+            activeProfile.windowStack = [];
+        }
         activeProfileSession = loadSession(activeProfile.id);
+        storageMod.set(profilesKey, profiles);
     } finally {
         swappingProfiles = false;
     }
-    openAllWindows();
+    openWidgetWindows();
 }
 rpc.register(activateProfile);
 
@@ -451,7 +766,7 @@ export function renameProfile(id, name) {
             x.name = name;
         }
     }
-    storage.set('window-profiles', profiles);
+    storageMod.set(profilesKey, profiles);
 }
 rpc.register(renameProfile);
 
@@ -465,7 +780,7 @@ export function removeProfile(id) {
         throw new Error("Cannot remove last profile");
     }
     const profile = profiles.splice(idx, 1)[0];
-    storage.set('window-profiles', profiles);
+    storageMod.set(profilesKey, profiles);
     if (profile.active) {
         activateProfile(profiles[0].id);
     }
@@ -473,104 +788,169 @@ export function removeProfile(id) {
 rpc.register(removeProfile);
 
 
-export function getWindows() {
+export function getWidgetWindowSpecs() {
+    if (!activeProfile) {
+        initProfiles();
+    }
+    const windows = Object.entries(activeProfile.windows);
+    const stack = activeProfile.windowStack || [];
+    windows.sort(([a], [b]) => stack.indexOf(b) - stack.indexOf(a));
+    return windows.map(x => x[1]);
+}
+rpc.register(getWidgetWindowSpecs);
+rpc.register(() => {
     if (!activeProfile) {
         initProfiles();
     }
     return activeProfile.windows;
-}
-rpc.register(getWindows);
+}, {name: 'getWindows', deprecatedBy: getWidgetWindowSpecs});
 
 
 let _windowsUpdatedTimeout;
-export function setWindows(wins) {
-    if (app.quiting || swappingProfiles) {
+export function saveProfiles() {
+    if (main.quiting || swappingProfiles) {
         return;
     }
     if (!activeProfile) {
         initProfiles();
     }
-    activeProfile.windows = wins;
-    storage.set('window-profiles', profiles);
+    storageMod.set(profilesKey, profiles);
     clearTimeout(_windowsUpdatedTimeout);
-    _windowsUpdatedTimeout = setTimeout(() => eventEmitter.emit('set-windows', wins), 200);
+    _windowsUpdatedTimeout = setTimeout(() => {
+        eventEmitter.emit('save-widget-window-specs', activeProfile.windows);
+        eventEmitter.emit('set-windows', activeProfile.windows); // DEPRECATED
+    }, 200);
 }
 
 
-export function getWindow(id) {
-    return getWindows()[id];
-}
-rpc.register(getWindow);
-
-
-export function setWindow(id, data) {
-    const wins = getWindows();
-    wins[id] = data;
-    setWindows(wins);
-}
-rpc.register(setWindow);
-
-
-export function updateWindow(id, updates) {
-    const w = getWindow(id);
-    if (app.quiting || swappingProfiles) {
-        return w;
+export function getWidgetWindowSpec(id) {
+    if (!activeProfile) {
+        initProfiles();
     }
-    Object.assign(w, updates);
-    setWindow(id, w);
+    return activeProfile.windows[id];
+}
+rpc.register(getWidgetWindowSpec);
+rpc.register(getWidgetWindowSpec, {name: 'getWindow', deprecatedBy: getWidgetWindowSpec});
+
+
+export function getSubWindowSettings(id) {
+    if (!activeProfile) {
+        initProfiles();
+    }
+    return activeProfile.subWindowSettings[id];
+}
+
+
+export function setWidgetWindowSpec(id, data) {
+    if (!activeProfile) {
+        initProfiles();
+    }
+    activeProfile.windows[id] = data;
+    saveProfiles();
+}
+rpc.register(setWidgetWindowSpec);
+rpc.register(setWidgetWindowSpec, {name: 'setWindow', deprecatedBy: setWidgetWindowSpec});
+
+
+export function updateWidgetWindowSpec(id, updates) {
+    let spec = getWidgetWindowSpec(id);
+    if (!spec) {
+        spec = activeProfile.windows[id] = {};
+    }
+    if (main.quiting || swappingProfiles) {
+        return spec;
+    }
+    Object.assign(spec, updates);
+    saveProfiles();
     if ('closed' in updates) {
         setTimeout(menu.updateTrayMenu, 100);
     }
-    return w;
+    return spec;
 }
-rpc.register(updateWindow);
+rpc.register(updateWidgetWindowSpec);
+rpc.register(updateWidgetWindowSpec, {name: 'updateWindow', deprecatedBy: updateWidgetWindowSpec});
 
 
-export function removeWindow(id) {
-    const win = getActiveWindow(id);
+export function updateSubWindowSettings(id, updates) {
+    let settings = getSubWindowSettings(id);
+    if (!settings) {
+        settings = activeProfile.subWindowSettings[id] = {};
+    }
+    if (main.quiting || swappingProfiles) {
+        return settings;
+    }
+    Object.assign(settings, updates);
+    saveProfiles();
+    if ('closed' in updates) {
+        setTimeout(menu.updateTrayMenu, 100);
+    }
+    return settings;
+}
+
+
+export function removeWidgetWindow(id) {
+    const win = getWidgetWindow(id);
     if (win) {
         win.close();
     }
-    const wins = getWindows();
-    delete wins[id];
-    setWindows(wins);
+    if (!activeProfile) {
+        initProfiles();
+    }
+    delete activeProfile.windows[id];
+    saveProfiles();
     setTimeout(menu.updateTrayMenu, 100);
 }
-rpc.register(removeWindow);
+rpc.register(removeWidgetWindow);
+rpc.register(removeWidgetWindow, {name: 'removeWindow', deprecatedBy: removeWidgetWindow});
 
 
-function initWindow({id, type, options, ...state}) {
+function initWidgetWindowSpec({id, type, options, ...rem}) {
     id = id || `user-${type}-${Date.now()}-${Math.random() * 1000000 | 0}`;
-    const manifest = windowManifestsByType.get(type);
-    return [
+    const manifest = widgetWindowManifestsByType.get(type);
+    const spec = {
+        ...manifest,
         id,
-        {
-            ...manifest,
-            id,
-            type,
-            options,
-            ...state,
-        }
-    ];
+        type,
+        ...rem,
+    };
+    spec.options = Object.assign({}, spec.options, options);
+    return spec;
 }
 
 
-export function createWindow(options) {
-    const [id, data] = initWindow(options);
-    setWindow(id, data);
+export function createWidgetWindow(options) {
+    const spec = initWidgetWindowSpec(options);
+    setWidgetWindowSpec(spec.id, spec);
     setTimeout(menu.updateTrayMenu, 100);
-    return id;
+    return spec;
 }
-rpc.register(createWindow);
+rpc.register(createWidgetWindow);
+rpc.register(options => createWidgetWindow(options).id,
+             {name: 'createWindow', deprecatedBy: createWidgetWindow});
 
 
-export function highlightWindow(id) {
-    const win = getActiveWindow(id);
+export function highlightWidgetWindow(id) {
+    const win = getWidgetWindow(id);
     if (win) {
         _highlightWindow(win);
     }
 }
-rpc.register(highlightWindow);
+rpc.register(highlightWidgetWindow);
+rpc.register(highlightWidgetWindow, {name: 'highlightWindow', deprecatedBy: highlightWidgetWindow});
+
+
+rpc.register(function() {
+    const wc = this;
+    if (!wc) {
+        throw new TypeError('electron-only rpc function');
+    }
+    const win = wc.getOwnerBrowserWindow();
+    if (isMac) {
+        electron.app.focus({steal: true});
+    }
+    win.focus();
+}, {name: 'focusOwnWindow'});
+
 
 
 function _highlightWindow(win) {
@@ -583,24 +963,46 @@ function _highlightWindow(win) {
 }
 
 
-export function reopenWindow(id) {
-    const win = getActiveWindow(id);
+export function reopenWidgetWindow(id) {
+    const win = getWidgetWindow(id);
     if (win) {
         win.close();
     }
-    openWindow(id);
+    openWidgetWindow(id);
 }
-rpc.register(reopenWindow);
+rpc.register(reopenWidgetWindow);
+rpc.register(reopenWidgetWindow, {name: 'reopenWindow', deprecatedBy: reopenWidgetWindow});
 
 
-export function openWindow(id) {
-    const spec = getWindow(id);
+export function openWidgetWindow(id) {
+    const spec = getWidgetWindowSpec(id);
     if (spec.closed) {
-        updateWindow(id, {closed: false});
+        updateWidgetWindowSpec(id, {closed: false});
     }
-    _openWindow(id, spec);
+    _openSpecWindow(spec);
 }
-rpc.register(openWindow);
+rpc.register(openWidgetWindow);
+rpc.register(openWidgetWindow, {name: 'openWindow', deprecatedBy: openWidgetWindow});
+
+
+function _saveWindowAsTop(id) {
+    if (!activeProfile) {
+        throw new Error("no active profile");
+    }
+    if (!activeProfile.windowStack) {
+        throw new Error("no window stack");
+    }
+    if (!activeProfile.windows[id]) {
+        throw new Error("Invalid window id");
+    }
+    const stack = activeProfile.windowStack;
+    const idx = stack.indexOf(id);
+    if (idx !== -1) {
+        stack.splice(idx, 1);
+    }
+    stack.push(id);
+    saveProfiles();
+}
 
 
 export async function exportProfile(id) {
@@ -645,23 +1047,26 @@ rpc.register(importProfile);
 function _getPositionForDisplay(display, {x, y, width, height}) {
     const db = display.bounds;
     if (x == null) {
-        x = db.x + Math.round((db.width - width) / 2);
+        x = db.x + (db.width - width) / 2;
     } else if (x < 0) {
         x = db.x + db.width + x - width;
     } else if (x <= 1) {
-        x = db.x + Math.round(db.width * x);
+        x = db.x + db.width * x;
     } else {
         x = db.x + x;
     }
     if (y == null) {
-        y = db.y + Math.round((db.height - height) / 2);
+        y = db.y + (db.height - height) / 2;
     } else if (y < 0) {
         y = db.y + db.height + y - height;
     } else if (y <= 1) {
-        y = db.y + Math.round(db.height * y);
+        y = db.y + db.height * y;
     } else {
         y = db.y + y;
     }
+    // Must use integer values for electron.BrowserWindow
+    x = Math.round(x);
+    y = Math.round(y);
     return {x, y};
 }
 
@@ -670,16 +1075,16 @@ function getBoundsForDisplay(display, {x, y, width, height, aspectRatio}) {
     const defaultWidth = 800;
     const defaultHeight = 600;
     const dSize = display.size;
-    width = width != null && width <= 1 ? Math.round(dSize.width * width) : width;
-    height = height != null && height <= 1 ? Math.round(dSize.height * height) : height;
+    width = width != null && width <= 1 ? dSize.width * width : width;
+    height = height != null && height <= 1 ? dSize.height * height : height;
     if (aspectRatio) {
         if (width == null && height == null) {
             width = defaultWidth;
         }
         if (height == null) {
-            height = Math.round(width * aspectRatio);
+            height = width * aspectRatio;
         } else {
-            width = Math.round(width / aspectRatio);
+            width = width / aspectRatio;
         }
     } else {
         width = width || defaultWidth;
@@ -695,6 +1100,9 @@ function getBoundsForDisplay(display, {x, y, width, height, aspectRatio}) {
         height = dSize.height;
         width = height * finalAspectRatio;
     }
+    // Must use integer values for electron.BrowserWindow
+    width = Math.round(width);
+    height = Math.round(height);
     ({x, y} = _getPositionForDisplay(display, {x, y, width, height}));
     return {x, y, width, height};
 }
@@ -742,16 +1150,37 @@ function handleNewSubWindow(parent, spec, webPrefs) {
                 return {action: 'deny'};
             }
         }
+        const newWinOptions = {};
         const q = new URLSearchParams((new URL(url)).search);
-        const width = Number(q.get('width')) || undefined;
-        const height = Number(q.get('height')) || undefined;
+        const windowType = q.get('windowType');
+        if (windowType) {
+            const m = widgetWindowManifestsByType.get(windowType);
+            Object.assign(newWinOptions, m && m.options);
+        }
+        const windowId = q.get('windowId');
+        if (windowId) {
+            Object.assign(newWinOptions, getSubWindowSettings(windowId));
+        }
+        const w = Number(q.get('width'));
+        const h = Number(q.get('height'));
+        if (w) {
+            newWinOptions.width = w;
+        }
+        if (h) {
+            newWinOptions.height = h;
+        }
         const isChildWindow = q.has('child-window');
         const display = getDisplayForWindow(parent);
-        const bounds = getBoundsForDisplay(display, {width, height});
-        const frame = q.has('frame') || !url.startsWith('file://');
+        const bounds = getBoundsForDisplay(display, newWinOptions);
+        const newWinSpec = (windowId || windowType) ?
+            initWidgetWindowSpec({type: windowType, id: windowId || spec?.id}) : spec;
+        // Window frame prio: url query -> is external page -> win-spec options -> copy parent
+        const frame = q.has('frame') ?
+            !['false', '0', 'no', 'off'].includes(q.get('frame').toLowerCase()) :
+            !isInternalScheme(url) || (newWinSpec ? !!newWinSpec.options?.frame : parent.frame);
         const newWin = new SauceBrowserWindow({
             subWindow: true,
-            spec,
+            spec: newWinSpec,
             frame,
             show: false,
             transparent: frame === false,
@@ -760,20 +1189,34 @@ function handleNewSubWindow(parent, spec, webPrefs) {
             parent: isChildWindow ? parent : undefined,
             ...bounds,
             webPreferences: {
-                sandbox: true,
                 preload: path.join(appPath, 'src/preload/common.js'),
                 ...webPrefs,
+                sandbox: true,
             }
         });
+        newWin.webContents.on('will-attach-webview', ev => {
+            ev.preventDefault();
+            console.error("<webview> in sub window is not allowed");
+        });
+        if (windowId) {
+            let _to;
+            newWin.on('resize', () => {
+                clearTimeout(_to);
+                _to = setTimeout(() => {
+                    const [_width, _height] = newWin.getSize();
+                    updateSubWindowSettings(windowId, {width: _width, height: _height});
+                }, 200);
+            });
+        }
         newWin.setMenuBarVisibility(false);
-        if (spec && spec.overlay !== false) {
+        if ((newWinSpec && newWinSpec.overlay !== false) || parent.isAlwaysOnTop()) {
             newWin.setAlwaysOnTop(true, 'pop-up-menu');
         }
         if (target && target !== '_blank') {
             newWin._url = url;
             targetRefs.set(target, new WeakRef(newWin));
         }
-        handleNewSubWindow(newWin, spec, webPrefs);
+        handleNewSubWindow(newWin, newWinSpec, webPrefs);
         newWin.loadURL(url);
         newWin.show();
         return {action: 'deny'};
@@ -786,17 +1229,18 @@ export async function getWindowsStorage(session) {
     const win = new electron.BrowserWindow({
         show: false,
         webPreferences: {
-            sandbox: true,
             session,
             preload: path.join(appPath, 'src/preload/storage-proxy.js'),
+            sandbox: true,
         }
     });
-    const p = new Promise(resolve => win.webContents.on('ipc-message',
-        (ev, ch, storage) => resolve(storage)));
+    let _resolve;
+    win.webContents.on('ipc-message', (ev, ch, storage) => _resolve(storage));
+    win.webContents.on('did-finish-load', () => win.webContents.send('export'));
+    const p = new Promise(resolve => _resolve = resolve);
     let storage;
     try {
-        win.webContents.on('did-finish-load', () => win.webContents.send('export'));
-        win.loadFile('/pages/dummy.html');
+        win.loadURL('file:///sauce:dummy');
         storage = await p;
     } finally {
         if (!win.isDestroyed()) {
@@ -812,16 +1256,17 @@ export async function setWindowsStorage(storage, session) {
     const win = new electron.BrowserWindow({
         show: false,
         webPreferences: {
-            sandbox: true,
             session,
             preload: path.join(appPath, 'src/preload/storage-proxy.js'),
+            sandbox: true,
         }
     });
-    const p = new Promise((resolve, reject) => win.webContents.on('ipc-message',
-        (ev, ch, success) => success ? resolve() : reject()));
+    let _resolve, _reject;
+    win.webContents.on('ipc-message', (ev, ch, success) => success ? _resolve() : _reject());
+    win.webContents.on('did-finish-load', () => win.webContents.send('import', storage));
+    const p = new Promise((resolve, reject) => (_resolve = resolve, _reject = reject));
     try {
-        win.webContents.on('did-finish-load', () => win.webContents.send('import', storage));
-        win.loadFile('/pages/dummy.html');
+        win.loadURL('file:///sauce:dummy');
         await p;
     } finally {
         if (!win.isDestroyed()) {
@@ -831,22 +1276,22 @@ export async function setWindowsStorage(storage, session) {
 }
 
 
-function _openWindow(id, spec) {
-    console.debug("Opening window:", id, spec.type);
+function _openSpecWindow(spec) {
+    const id = spec.id;
+    console.info(`Opening window [${spec.ephemeral ? 'EPHEMERAL' : 'WIDGET'}] (${spec.type}):`, id);
     const overlayOptions = {
         alwaysOnTop: true,
         maximizable: false,
         fullscreenable: false,
     };
-    const manifest = windowManifestsByType.get(spec.type);
+    const manifest = widgetWindowManifestsByType.get(spec.type);
     let bounds = spec.bounds;
     const inBounds = !bounds || isWithinDisplayBounds(bounds);
     if (!inBounds) {
         console.warn("Reseting window that is out of bounds:", bounds);
     }
     if (!inBounds || !bounds) {
-        bounds = getBoundsForDisplay(getCurrentDisplay(),
-            {...manifest.options, ...spec.options});
+        bounds = getBoundsForDisplay(getCurrentDisplay(), {...manifest.options, ...spec.options});
     }
     // Order of options is crucial...
     const options = {
@@ -855,23 +1300,30 @@ function _openWindow(id, spec) {
         ...spec.options,
         ...bounds,
     };
+    const frame = !!options.frame;
     const win = new SauceBrowserWindow({
         spec,
         show: false,
-        frame: false,
-        transparent: true,
-        hasShadow: false,
-        roundedCorners: false,
-        webPreferences: {
-            sandbox: true,
-            preload: path.join(appPath, 'src/preload/common.js'),
-            webgl: false,
-            ...manifest.webPreferences,
-            ...spec.webPreferences,
-            session: activeProfileSession,
-        },
+        frame,
+        transparent: frame === false,
+        hasShadow: frame !== false,
+        roundedCorners: frame !== false,
         ...options,
+        webPreferences: {
+            ...manifest.webPreferences,
+            preload: path.join(appPath, 'src/preload/common.js'),
+            session: activeProfileSession,
+            sandbox: true,
+        },
     });
+    const webContents = win.webContents;  // Save to prevent electron from killing us.
+    webContents.on('will-attach-webview', (ev, webPreferences) => {
+        webPreferences.preload = path.join(appPath, 'src/preload/webview.js');
+        webPreferences.session = activeProfileSession;
+    });
+    if (spec.emulateNormalUserAgent) {
+        emulateNormalUserAgent(win);
+    }
     win.setMenuBarVisibility(false);
     try {
         win.setBounds(bounds); // https://github.com/electron/electron/issues/10862
@@ -883,28 +1335,18 @@ function _openWindow(id, spec) {
     if (spec.overlay !== false) {
         win.setAlwaysOnTop(true, 'pop-up-menu');
     }
-    const webContents = win.webContents;  // Save to prevent electron from killing us.
     handleNewSubWindow(win, spec, {session: activeProfileSession});
-    let saveStateTimeout;
-    function onBoundsUpdate() {
-        clearTimeout(saveStateTimeout);
-        saveStateTimeout = setTimeout(() => updateWindow(id, {bounds: win.getBounds()}), 200);
-    }
-    win.on('move', onBoundsUpdate);
-    win.on('resize', onBoundsUpdate);
-    win.on('close', () => {
+    let boundsSaveTimeout;
+    const onBoundsUpdate = () => {
+        clearTimeout(boundsSaveTimeout);
+        boundsSaveTimeout = setTimeout(() => updateWidgetWindowSpec(id, {bounds: win.getBounds()}), 200);
+    };
+    if (!spec.ephemeral) {
+        win.on('move', onBoundsUpdate);
+        win.on('resize', onBoundsUpdate);
+        win.on('focus', () => _saveWindowAsTop(id));
         if (!manifest.alwaysVisible) {
-            updateWindow(id, {closed: true});
-        }
-    });
-    if (modContentScripts.length) {
-        for (const x of modContentScripts) {
-            webContents.on('did-finish-load', () => webContents.executeJavaScript(x));
-        }
-    }
-    if (modContentStyle.length) {
-        for (const x of modContentStyle) {
-            webContents.on('did-finish-load', () => webContents.insertCSS(x));
+            win.on('close', () => updateWidgetWindowSpec(id, {closed: true}));
         }
     }
     const query = manifest.query;
@@ -918,29 +1360,27 @@ function _openWindow(id, spec) {
 
 
 let _loadedMods;
-export function openAllWindows() {
+export function openWidgetWindows() {
     if (!_loadedMods) {
         _loadedMods = true;
         try {
             const manifests = mods.getWindowManifests();
-            windowManifests.push(...manifests);
-            windowManifestsByType.clear();
-            for (const x of windowManifests) {
-                windowManifestsByType.set(x.type, x);
+            widgetWindowManifests.push(...manifests);
+            widgetWindowManifestsByType.clear();
+            for (const x of widgetWindowManifests) {
+                widgetWindowManifestsByType.set(x.type, x);
             }
-            modContentScripts.push(...mods.getWindowContentScripts());
-            modContentStyle.push(...mods.getWindowContentStyle());
         } catch(e) {
             console.error("Failed to load mod window data", e);
         }
     }
-    for (const [id, spec] of Object.entries(getWindows())) {
-        const manifest = windowManifestsByType.get(spec.type);
+    for (const spec of getWidgetWindowSpecs().reverse()) {
+        const manifest = widgetWindowManifestsByType.get(spec.type);
         if (manifest && (manifest.alwaysVisible || !spec.closed)) {
             try {
-                _openWindow(id, spec);
+                _openSpecWindow(spec);
             } catch(e) {
-                console.error("Failed to open window", id, spec, e);
+                console.error("Failed to open window", spec.id, e);
             }
         }
     }
@@ -955,14 +1395,14 @@ export function makeCaptiveWindow(options={}, webPrefs={}) {
         center: true,
         maximizable: false,
         fullscreenable: false,
-        webPreferences: {
-            sandbox: true,
-            preload: path.join(appPath, 'src/preload/common.js'),
-            ...webPrefs,
-            session,
-        },
         ...options,
         ...bounds,
+        webPreferences: {
+            preload: path.join(appPath, 'src/preload/common.js'),  // CAUTION: can be overridden
+            ...webPrefs,
+            session,
+            sandbox: true,
+        },
     });
     win.setMenuBarVisibility(false);
     if (!options.disableNewWindowHandler) {
@@ -976,16 +1416,22 @@ export function makeCaptiveWindow(options={}, webPrefs={}) {
 }
 
 
+export function makeOrFocusEphemeralWindow(options) {
+    const spec = initWidgetWindowSpec({...options, ephemeral: true});
+    return _openSpecWindow(spec);
+}
+
+
 export async function eulaConsent() {
-    if (storage.get('eula-consent')) {
+    if (storageMod.get('eula-consent')) {
         return true;
     }
     const win = makeCaptiveWindow({file: '/pages/eula.html'});
     let closed;
     const consenting = new Promise(resolve => {
-        rpc.register(async agree => {
+        rpc.register(agree => {
             if (agree === true) {
-                storage.set('eula-consent', true);
+                storageMod.set('eula-consent', true);
                 resolve(true);
             } else {
                 console.warn("User does not agree to EULA");
@@ -1058,12 +1504,41 @@ export async function zwiftLogin(options) {
         closed = true;
         setDone();
     });
-    electron.ipcMain.on('zwift-creds', onCreds);
+    win.webContents.ipc.on('zwift-creds', onCreds);
+    win.show();
     try {
-        win.show();
         return await done;
     } finally {
-        electron.ipcMain.off('zwift-creds', onCreds);
+        if (!closed) {
+            win.close();
+        }
+    }
+}
+
+
+export async function confirmDialog(options) {
+    const modal = !!options.parent;
+    const win = makeCaptiveWindow({
+        file: '/pages/confirm-dialog.html',
+        width: options.width || 400,
+        height: options.height || 500,
+        show: false,
+        modal,
+        parent: options.parent,
+        spec: {options: {...options, parent: undefined}},
+    });
+    let closed;
+    const done = new Promise(resolve => {
+        win.on('closed', () => {
+            closed = true;
+            resolve(false);
+        });
+        win.webContents.ipc.handle('confirm-dialog-response', (ev, confirmed) => resolve(confirmed));
+    });
+    win.show();
+    try {
+        return await done;
+    } finally {
         if (!closed) {
             win.close();
         }
@@ -1090,8 +1565,8 @@ export async function welcomeSplash() {
         alwaysOnTop: true,
         ...getCurrentDisplay().bounds,
         webPreferences: {
-            sandbox: true,
             preload: path.join(appPath, 'src/preload/common.js'),
+            sandbox: true,
         },
     });
     welcomeWin.removeMenu();
@@ -1104,9 +1579,9 @@ export async function welcomeSplash() {
 }
 
 
-export async function patronLink() {
-    let membership = storage.get('patron-membership');
-    if (membership && membership.patronLevel >= 10) {
+export async function patronLink({sauceApp, forceCheck}) {
+    let membership = storageMod.get('patron-membership');
+    if (membership && membership.patronLevel >= 10 && !forceCheck) {
         // XXX Implement refresh once in a while.
         return true;
     }
@@ -1119,34 +1594,40 @@ export async function patronLink() {
         preload: path.join(appPath, 'src/preload/patron-link.js'),
         session: loadSession('patreon'),
     });
-    // Prevent Patreon's datedome.co bot service from blocking us.
-    const ua = win.webContents.userAgent;
-    win.webContents.userAgent = ua.replace(/ SauceforZwift.*? /, ' ').replace(/ Electron\/.*? /, ' ');
+    // Prevent Patreon's datedome.co bot service from blocking us and fix federated logins.. (legacy only now)
+    emulateNormalUserAgent(win);
     let resolve;
-    electron.ipcMain.on('patreon-reset-session', async () => {
+    win.webContents.ipc.on('patreon-reset-session', () => {
         win.webContents.session.clearStorageData();
         win.webContents.session.clearCache();
         electron.app.relaunch();
         win.close();
     });
-    electron.ipcMain.on('patreon-auth-code', (ev, code) => resolve({code}));
-    electron.ipcMain.on('patreon-special-token', (ev, token) => resolve({token}));
+    win.webContents.ipc.on('patreon-auth-code', (ev, code) => resolve({code, legacy: true}));
+    win.webContents.ipc.on('patreon-special-token', (ev, token) => resolve({token}));
+    sauceApp.on('external-open', x => {
+        if (x.name === 'patron' && x.path === '/link') {
+            resolve({code: x.data.code});
+        }
+    });
     win.on('closed', () => resolve({closed: true}));
+    let isMember = false;
     while (true) {
-        const {code, token, closed} = await new Promise(_resolve => resolve = _resolve);
+        const {code, token, closed, legacy} = await new Promise(_resolve => resolve = _resolve);
         let isAuthed;
         if (closed) {
-            return false;
+            return isMember;
         } else if (token) {
             membership = await patreon.getLegacyMembership(token);
         } else {
-            isAuthed = code && await patreon.link(code);
-            membership = isAuthed && await patreon.getMembership();
+            win.loadFile('/pages/patron-checking.html');
+            isAuthed = code && await patreon.link(code, {legacy});
+            membership = isAuthed && await patreon.getMembership({legacy});
         }
         if (membership && membership.patronLevel >= 10) {
-            storage.set('patron-membership', membership);
-            win.close();
-            return true;
+            isMember = true;
+            storageMod.set('patron-membership', membership);
+            win.loadFile('/pages/patron-success.html');
         } else {
             const query = {};
             if (isAuthed) {
@@ -1162,7 +1643,7 @@ export async function patronLink() {
 }
 
 
-export async function systemMessage(msg) {
+export function systemMessage(msg) {
     const overviewWin = SauceBrowserWindow.getAllWindows().find(x => x.spec && x.spec.type === 'overview');
     const oBounds = overviewWin.getBounds();
     const dBounds = getDisplayForWindow(overviewWin).bounds;
@@ -1189,8 +1670,8 @@ export async function systemMessage(msg) {
         roundedCorners: false,
         alwaysOnTop: true,
         webPreferences: {
-            sandbox: true,
             preload: path.join(appPath, 'src/preload/common.js'),
+            sandbox: true,
         },
     });
     sysWin.removeMenu();

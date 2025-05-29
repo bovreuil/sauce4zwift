@@ -4,6 +4,11 @@
             <div class="name">
                 Athlete not found: {{athleteId}}
             </div>
+            <div class="buttons">
+                <% if (!obj.embedded) { %>
+                    <a href title="Close this window" data-action="close" class="electron-only"><ms>close</ms></a>
+                <% } %>
+            </div>
         </header>
     <% } else { %>
         <header class="title">
@@ -18,26 +23,17 @@
                 {{athlete.sanitizedFullname}}
             </div>
             <div class="buttons">
-                <a href="https://zwiftpower.com/profile.php?z={{athleteId}}"
-                   title="Open ZwiftPower profile"
-                   target="_blank" external><img src="images/zp_logo.png"/></a>
-                <% if (gameConnectionStatus && gameConnectionStatus.connected) { %>
-                    <a title="Watch this athlete" data-action="watch" href><ms>video_camera_front</ms></a>
-                    <% if (obj.debug) { %>
-                        <a title="Join this athlete" data-action="join" href><ms>follow_the_signs</ms></a>
-                    <% } %>
-                <% } else { %>
-                    <a title="Game Connection is required to send the Watch command" disabled><ms>videocam</ms></a>
-                    <% if (obj.debug) { %>
-                        <a title="Game Connection is required to send the Join (i.e. ride with) command"
-                           disabled><ms>follow_the_signs</ms></a>
-                    <% } %>
-                <% } %>
+                <a title="Open Grid Window focused on this athlete"
+                   href="/pages/watching.html?windowId=watching-link-popup&windowType=watching&id={{athlete.id}}"
+                   target="watching_popup_{{athlete.id}}" class="enabled-in-game-only" disabled><ms>grid_view</ms></a>
+                <a title="Analysis view of this athletes session"
+                   href="/pages/analysis.html?windowType=analysis&id={{athlete.id}}"
+                   target="analysis_popup_{{athlete.id}}" class="enabled-in-game-only" disabled><ms>monitoring</ms></a>
+                <a title="Watch this athlete (Game Connection is required)"
+                   data-action="watch" {{!gameConnection ? 'disabled' : ''}} href><ms>video_camera_front</ms></a>
                 <a title="Toggle visibility of chat messages from this person"
                    data-action="toggleMuted" class="{{athlete.muted ? 'active' : ''}}"
                    href><ms>comments_disabled</ms></a>
-                <a title="Export FIT activity file of sampled data"
-                   data-action="exportFit" href><ms>file_download</ms></a>
                 <a title="Give a Ride On to this athlete" {{obj.rideonSent ? 'disabled' : 'href'}}
                    data-action="rideon"><ms>thumb_up</ms></a>
                 <% if (athlete.following) { %>
@@ -58,52 +54,68 @@
             </div>
         </header>
         <section>
-            <% if (athlete.avatar) { %>
-                <a class="avatar" href="profile-avatar.html?id={{athlete.id}}" target="profile-avatar">
-                    <img src="{{athlete.avatar}}"/>
-                </a>
-            <% } else { %>
-                <a class="avatar"><img src="images/blankavatar.png"/></a>
-            <% } %>
-            <div class="info">
-                <% if (athlete.team) { %>
-                    <div class="row p2"><key>Team</key>{-common.teamBadge(athlete.team)-}</div>
+            <div class="avatar">
+                <% if (athlete.avatar) { %>
+                    <a href="profile-avatar.html?id={{athlete.id}}" target="profile-avatar"><img src="{{athlete.avatar}}"/></a>
+                <% } else { %>
+                    <img class="blank" src="images/blankavatar.png"/>
                 <% } %>
-                <% if (athlete.level) { %>
-                    <div class="row p2"><key>Level</key>{{athlete.level}}</div>
-                <% } %>
-                <% if (athlete.age) { %>
-                    <div class="row p2"><key>Age</key>{{athlete.age}}</div>
-                <% } %>
-                <% if (athlete.weight) { %>
-                    <div class="row p2"><key>Weight</key>{-humanWeightClass(athlete.weight, {suffix: true, html: true})-}</div>
-                <% } %>
-                <% if (athlete.height) { %>
-                    <div class="row p2"><key>Height</key>{-humanHeight(athlete.height, {html: true})-}</div>
-                <% } %>
-                <div class="row p2">
-                    <key>Threshold</key>
-                    FTP: {-humanPower(athlete.ftp, {suffix: true, html: true})-}
-                </div>                
-                <% if (athlete.cp || athlete.ftp) { %>
-                    <div class="row p2" title="CP is Critical Power (often similiar to FTP) and W' (pronounced &quot;W Prime&quot;) is a the amount of energy (kJ) available when working harder than the CP value.  Think of it as a battery level." >
-                        <key>Capacity</key>
-                        CP <a title="Click to edit - Press Enter to save"
-                            href="javascript:void(0)" data-key="cp" data-type="number"
-                            class="inline-edit cp">{-humanPower(athlete.cp || athlete.ftp, {suffix: true, html: true})-}</a>,
-                        W' <a title="Click to edit - Press Enter to save"
-                            href="javascript:void(0)" data-key="wPrime" data-type="number"
-                            class="inline-edit wprime">{-humanNumber(athlete.wPrime / 1000, {suffix: 'kJ', html: true})-}</a>
+                <% if (athlete.racingCategory && athlete.racingScore) { %>
+                    <div class="racing-score-holder">
+                        <div class="sparkline"></div>
+                        <div class="racing-score-avatar-badge" 
+                             title="Zwift Racing Score is a results based ranking system">
+                            {-common.eventBadge(athlete.racingCategory)-}
+                            <div class="number">{{humanNumber(athlete.racingScore || null)}}</div>
+                        </div>
                     </div>
                 <% } %>
             </div>
+            <div class="info">
+                <% if (athlete.team) { %>
+                    <div class="row p2"><key>Team</key><value>{-common.teamBadge(athlete.team)-}</value></div>
+                <% } %>
+                <% if (athlete.level) { %>
+                    <div class="row p2"><key>Level</key><value>{{athlete.level}}</value></div>
+                <% } %>
+                <% if (athlete.age) { %>
+                    <div class="row p2"><key>Age</key><value>{{athlete.age}}</value></div>
+                <% } %>
+                <% if (athlete.weight || athlete.height) { %>
+                    <div class="row p2">
+                        <key>Body</key>
+                        <value>
+                            {-humanWeightClass(athlete.weight, {suffix: true, html: true})-},
+                            {-humanHeight(athlete.height, {html: true, suffix: true})-}
+                        </value>
+                    </div>
+                <% } %>
+                <div class="row p2"><key>FTP</key><value>{-humanPower(athlete.ftp, {suffix: true, html: true})-}</value></div>
+                <div class="row p2" title="CP is Critical Power (often similiar to FTP) and W' (pronounced &quot;W Prime&quot;) is a the amount of energy (kJ) available when working harder than the CP value.  Think of it as a battery level." >
+                    <key>CP</key>
+                    <value>
+                        <a title="Click to edit - Press Enter to save"
+                           href="javascript:void(0)" data-key="cp" data-type="number"
+                           class="inline-edit cp">{-humanPower(athlete.cp || athlete.ftp, {suffix: true, html: true})-}</a>,
+                        <a title="Click to edit - Press Enter to save"
+                            href="javascript:void(0)" data-key="wPrime" data-type="number" data-conv-factor="1000"
+                            class="inline-edit wprime">{-humanNumber(athlete.wPrime / 1000, {suffix: 'kJ', html: true, precision: 1})-}</a> W'
+                    </value>
+                </div>
+                <div class="row p2">
+                    <key>ID</key>
+                    <value><a href="https://zwiftpower.com/profile.php?z={{athleteId}}"
+                                    title="Open ZwiftPower profile" target="_blank"
+                                    external>{{athleteId}} <img class="inline-size" src="images/zp_logo.png"/></a></value>
+                </div>
+            </div>
             <div class="info live">
-                <div class="row p2"><key>World</key><span class="live" data-id="world">-</span></div>
-                <div class="row p2"><key>Power</key><span class="live" data-id="power">-</span></div>
-                <div class="row p2"><key>Speed</key><span class="live" data-id="speed">-</span></div>
-                <div class="row p2"><key>HR</key><span class="live" data-id="hr">-</span><abbr class="unit">bpm</abbr></div>
-                <div class="row p2"><key>Ride Ons</key><span class="live" data-id="rideons">-</span></div>
-                <div class="row p2"><key>Energy</key><span class="live" data-id="kj">-</span><abbr class="unit">kJ</abbr></div>
+                <div class="row p2"><key>World</key><value class="live" data-id="world">-</value></div>
+                <div class="row p2"><key>Power</key><value class="live" data-id="power">-</value></div>
+                <div class="row p2"><key>Speed</key><value class="live" data-id="speed">-</value></div>
+                <div class="row p2"><key>HR</key><value class="live" data-id="hr">-</value></div>
+                <div class="row p2"><key>Ride Ons</key><value class="live" data-id="rideons">-</value></div>
+                <div class="row p2"><key>Energy</key><value class="live" data-id="kj">-</value></div>
             </div>
         </section>
     <% } %>

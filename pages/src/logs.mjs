@@ -1,5 +1,7 @@
 import * as common from './common.mjs';
 
+common.enableSentry();
+
 let lastSeqno = 0;
 let curFilters = [];
 let filterSeq = 0;
@@ -110,6 +112,7 @@ function filterMsgs(seq, batch) {
                     const text = n.data.toLowerCase();
                     while (true) {
                         offt = text.indexOf(x, offt);
+                        // eslint-disable-next-line max-depth
                         if (offt !== -1) {
                             indexes.push(offt++);
                             visible = true;
@@ -173,6 +176,8 @@ function clear() {
 
 export async function main() {
     common.initInteractionListeners();
+    countEl = document.querySelector('header .count');
+    contentEl = document.querySelector('#content');
     common.subscribe('message', async o => {
         if (o.seqno < lastSeqno) {
             clear();
@@ -195,11 +200,10 @@ export async function main() {
         lastSeqno = x.seqno;
         addEntry(x);
     }
-    countEl = document.querySelector('header .count');
-    contentEl = document.querySelector('#content');
     requestAnimationFrame(() => contentEl.scrollTop = Number.MAX_SAFE_INTEGER >>> 1);
     document.querySelector('input[name="filter"]').addEventListener('input', onFilterInput);
     document.querySelector('select[name="level"]').addEventListener('change', onLevelChange);
     document.querySelector('.button.clear').addEventListener('click', onClearClick);
-    document.querySelector('.button.show-folder').addEventListener('click', () => common.rpc.showLogInFolder());
+    document.querySelector('.button.show-folder').addEventListener('click', () =>
+        common.rpc.showLogInFolder());
 }
